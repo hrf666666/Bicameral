@@ -12,12 +12,12 @@ A master LLM session can wake agents on edge devices and hand them tools. Handin
 
 | Failure mode | Typical form | Bicameral's control |
 |---|---|---|
-| Privilege escalation | agent calls a tool outside its grant; path escapes the data scope | per-call HMAC verification + tool allow-list + realpath scope check (D6/D7) |
+| Privilege escalation | agent calls a tool outside its grant; path escapes the data scope | per-call HMAC verification + tool allow-list + realpath scope check |
 | Injection | instructions smuggled in task text; poisoned file contents read into the LLM | payload injection scan (D12) + response-side smuggle stripping on **every** channel |
-| Replay / forgery | stolen token replayed; payload tampered; attacker-signed tokens | HMAC verify + per-jti nonce partition + strict TTL (D1/D2/D3) |
-| Overflow | unbounded calls, oversized payloads, runaway LLM spend | 3-dimension budget ledger (calls / llm_calls / bytes) + size caps (D9/D10) |
+| Replay / forgery | stolen token replayed; payload tampered; attacker-signed tokens | HMAC verify + per-jti nonce partition + strict TTL |
+| Overflow | unbounded calls, oversized payloads, runaway LLM spend | 3-dimension budget ledger (calls / llm_calls / bytes) + size caps |
 
-The principle: **the constraint lives at the execution gate, not in the prompt.** Every tool call is checked against a signed capability token (`cap/3`) and an ordered deny-chain D1–D16 (first match rejects); anything that fails to verify is rejected fail-closed and written to a JSONL audit log that reconstructs the whole chain by `(task_id, jti)`.
+The principle: **the constraint lives at the execution gate, not in the prompt.** Every tool call is checked against a signed capability token (`cap/3`) and an ordered deny-chain of sixteen checks (first match rejects); anything that fails to verify is rejected fail-closed and written to a JSONL audit log that reconstructs the whole chain by `(task_id, jti)`.
 
 ## 2. Components
 
@@ -29,6 +29,30 @@ The principle: **the constraint lives at the execution gate, not in the prompt.*
 | 3-dimension budget | calls / llm_calls / bytes debited atomically; 429 carries `dim=<exhausted dimension>` |
 | Inference proxy | `llm.complete` forwards to a local OpenAI-compatible backend as a governed tool: probe-driven degrade/recover, independent budget |
 | Token burning | 3 policy denials (D5/D6/D7/D12) on one token → D16/TOKEN_BURNED |
+
+
+### The deny-chain
+
+Every rejected call returns `reason_code = <code>/<constant>`. Sixteen checks run in a fixed order; the first match rejects:
+
+| Code | Rejected because… |
+|---|---|
+| `D1` | token signature doesn't verify (forged or tampered) |
+| `D2` | token expired — strict, no grace window |
+| `D3` | the one-time nonce was reused (replay) |
+| `D4` | token used on the wrong plane (control token on the agent plane) |
+| `D16` | token burned: 3 policy denials on the same token |
+| `D11` | token was issued under an older policy version |
+| `D9` | body over the 64 KiB cap |
+| `D5` | tool not in the registry |
+| `D6` | tool not in this token's allow-list |
+| `D15` | tool definition changed since the token was signed (fingerprint mismatch) |
+| `D8` | parameters violate the tool's schema, or carry forbidden keys (`actions`/`tool_calls`) |
+| `D12` | parameters match an injection pattern |
+| `D10` | budget exhausted — 429 with `dim=` the exhausted dimension |
+| `D7` | path resolves outside the token's data scope |
+| `D13` | the inference backend this tool depends on is down (fail-closed, nothing forwarded) |
+| `D14` | anything else threw — denied by default |
 
 ## 3. Evidence
 
