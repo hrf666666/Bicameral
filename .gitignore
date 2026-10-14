@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+nohup.out
+poc.log
+*.tmp
+.DS_Store
