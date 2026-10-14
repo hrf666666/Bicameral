@@ -1,101 +1,88 @@
-# 两院 Bicameral
+# Bicameral
 
-> 主控-边缘 LLM agent 编排的**权限层**：HMAC 能力令牌（cap/3）· default-deny 策略引擎 · 三维预算 · per-jti 防重放 · fail-closed 审计 · 同机 Strata 推理服务能力代理。
+> Master-edge permission layer for LLM agent orchestration: HMAC capability tokens and an ordered default-deny chain gate every tool call an edge agent makes. Single Python file, standard library only.
+>
+> 中文说明见 [README.zh-CN.md](README.zh-CN.md) · 设计文档 [docs/architecture.md](docs/architecture.md)
 
-不同架构、不同模型、不同速度的 agent 像两院一样各自审议、调和为一案；**未经全链校验的结果不放行**。
+**Bottom line**: third-round red team **16/17**, live regression **24/24** on the deploy host (including the real-LLM path). Privilege escalation, token forgery and tampering, nonce replay, prompt injection (including indirect injection end-to-end through a real LLM), 2 MB payload overflow, call- and LLM-budget exhaustion, and token burning after repeated probing — all blocked. 1,006 lines, zero dependencies.
 
-## 命名
+## 1. What problem it solves
 
-**两院（Bicameral）**：两个构成、节奏、职权都不同的院，各自审议、调和为一案——对应异构 agent 群体（能力异构、速度异构直接写进名字）；协调调和对应多模型结果调和；「一案经两院通过方成其法」呼应 fail-closed 终审门禁。
+A master LLM session can wake agents on edge devices and hand them tools. Handing tools to agents fails in four ways, and the common controls (prompt-time constraints, framework-built-in permissions) **fail open**: the constraint lives in the prompt, and an injection can talk its way past it.
 
-彩蛋：Julian Jaynes《二分心智的崩塌》——意识诞生于两腔心智的对话；以及中文「两院院士」的顶尖异构专家集体联想。
+| Failure mode | Typical form | Bicameral's control |
+|---|---|---|
+| Privilege escalation | agent calls a tool outside its grant; path escapes the data scope | per-call HMAC verification + tool allow-list + realpath scope check (D6/D7) |
+| Injection | instructions smuggled in task text; poisoned file contents read into the LLM | payload injection scan (D12) + response-side smuggle stripping on **every** channel |
+| Replay / forgery | stolen token replayed; payload tampered; attacker-signed tokens | HMAC verify + per-jti nonce partition + strict TTL (D1/D2/D3) |
+| Overflow | unbounded calls, oversized payloads, runaway LLM spend | 3-dimension budget ledger (calls / llm_calls / bytes) + size caps (D9/D10) |
 
-## 架构一页图
+The principle: **the constraint lives at the execution gate, not in the prompt.** Every tool call is checked against a signed capability token (`cap/3`) and an ordered deny-chain D1–D16 (first match rejects); anything that fails to verify is rejected fail-closed and written to a JSONL audit log that reconstructs the whole chain by `(task_id, jti)`.
 
-```
-┌─────────────────────────── 主控（bi150 级服务器）───────────────────────────┐
-│  控制平面 :18000                  agent 平面 :18001                        │
-│  POST /issue 签发能力令牌          POST /agent/invoke 逐调用验符执行        │
-│  GET  /audit /capabilities        ┌──────── enforce 链（有序短路）───────┐  │
-│  GET  /healthz(build_sha)         │ D1签名 D2过期 D16烧毁 D3重放 D4受众  │  │
-│                                   │ D11策略版本 D9尺寸 D5未知工具 D6越权 │  │
-│  能力注册表 + 工具指纹 (D15)        │ D8schema D12注入 D10预算 → handler  │  │
-│  三维预算账本 calls/llm/bytes      │ (D7范围 D9超限 D13降级 D14兜底)     │  │
-│  per-jti nonce 分区（防重放）       │ 响应侧走私剥离 strip_result         │  │
-└─────────────────────────────────┤ HMAC-SHA256 能力令牌 cap/3 ├──────────┘
-                                  │ 同机 Strata 推理服务（受控能力 llm.complete，  │
-                                  │ degrade/recover，预算独立计数）               │
-                                  └──────────────────────────────────────────┘
-                                              ▲ 能力令牌（边缘 agent 持有）
-                          ┌───────────────────┼───────────────────┐
-                     agent-ro(只读)      agent-rw(可写)         judge(评审)
-```
+## 2. Components
 
-一次调用的生命周期：主控 `/issue` 签发**能力令牌**（agent / task / 工具白名单 / TTL / 预算）→ 边缘 agent 携令牌+nonce 调 `/agent/invoke` → enforce 链任一环不过即拒（fail-closed，写入审计）→ 通过则执行工具并**全通道剥离走私载荷** → 返回白名单字段。
+| Component | What it does |
+|---|---|
+| Control plane `:18000` | `POST /issue` issues capability tokens; `GET /audit /capabilities /healthz` |
+| Agent plane `:18001` | `POST /agent/invoke` — verify, enforce, execute, audit |
+| Capability token `cap/3` | payload + HMAC-SHA256: agent / task / tool allow-list / TTL / budget / policy version / tool fingerprints |
+| 3-dimension budget | calls / llm_calls / bytes debited atomically; 429 carries `dim=<exhausted dimension>` |
+| Inference proxy | `llm.complete` forwards to a local OpenAI-compatible backend as a governed tool: probe-driven degrade/recover, independent budget |
+| Token burning | 3 policy denials (D5/D6/D7/D12) on one token → D16/TOKEN_BURNED |
 
-## 红队实证（摘要）
+## 3. Evidence
 
-14 条攻击用例（v0.1）→ 修复 10 项 → 17 条复测 **16/17 符合预期**（唯一未判定项为推理模型思考耗尽 max_tokens 的测试可行性问题，非安全失守）。已验证的拦截：越权调用、令牌伪造/篡改、nonce 重放、路径逃逸、prompt 注入（含间接注入端到端：投毒文件 → fs.read → 真实 Strata 推理 → D12 拦截）、2MB 溢出、预算耗尽（calls 与 llm_calls 独立计数）、令牌熔断（3 次策略拒绝 → D16/TOKEN_BURNED）、nonce 洪水跨令牌驱逐、降级隔离（Strata 挂掉时 llm.complete 503 而 fs.read 正常）。
+Red-team rounds are published under [docs/redteam/](docs/redteam/) with per-case evidence:
 
-完整攻防过程与设计推导见 [docs/architecture-v3.md](docs/architecture-v3.md)（自含完整稿，含前两轮红队实证）。
+| Round | Cases | Result |
+|---|---|---|
+| [v0.1 red team](docs/redteam/2026-10-14-v0.1-redteam/) | 14 attacks | 10 blocked / 3 breached / 1 env-limited → drove 10 fixes |
+| [v0.2 retest](docs/redteam/2026-10-14-v0.2-retest/) | 17 | **16/17 as designed**; the one open item is a testability issue (reasoning model exhausting `max_tokens`), not a breach |
+| Live regression (`scripts/live_check.py`) | 24 checks | **24/24** on the deploy host, including the real-LLM path |
 
-## 快速开始
+Test environment: Ubuntu 24.04 container, 112 cores / 1 TB RAM, 8× Iluvatar CoreX BI-V150; inference backend llama.cpp (Qwen3 27B GGUF).
 
-Python 3.11+，仅标准库，单文件，无任何依赖：
-
-```bash
-python3 bicameral/server.py --control-port 18000 --agent-port 18001
-```
-
-签发一枚只读令牌并调用：
+## 4. Quick start
 
 ```bash
-# 1. 签发（agent 清单见 SUBJECTS：agent-ro=[fs.read,llm.complete], agent-rw=[fs.read,fs.write]）
-curl -s -X POST http://127.0.0.1:18000/issue \
-  -H 'Content-Type: application/json' \
+# 30-second verification: normal round-trip + 5 attacks, each rejected at the gate
+python3 examples/quickstart.py
+```
+
+```bash
+# run the layer (control :18000, agent :18001); set a real master key outside experiments
+python3 bicameral/server.py
+
+# issue a read-only capability token
+curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json' \
   -d '{"agent":"agent-ro","task_id":"t1","tools":["fs.read"],"ttl_s":600,
        "budget":{"calls":10,"llm_calls":0,"bytes":65536}}'
-# → {"ok":true,"token":"<payload>.<hmac>","jti":"…","budget":{"calls":10,…}}
 
-# 2. 携令牌调用（每次调用用不同 nonce，重放即拒）
+# carry it on every call; a repeated nonce is rejected as a replay
 curl -s -X POST http://127.0.0.1:18001/agent/invoke \
-  -H 'Content-Type: application/json' \
-  -H 'X-Capability-Token: <token>' \
+  -H 'Content-Type: application/json' -H 'X-Capability-Token: <token>' \
   -d '{"nonce":"n-1","tool":"fs.read","params":{"path":"/tmp/bicameral/data/notes.txt"}}'
-
-# 3. 被拒时给出拒绝码：D1 签名 D2 过期 D3 重放 D5 未知工具 D6 越权 D7 范围
-#    D8 schema D9 尺寸 D10 预算(dim=耗尽维度) D12 注入 D16 烧毁 …
 ```
 
-安全要求：生产环境务必设置 `POC_MASTER_KEY`（64 位十六进制 = 32 字节主控密钥，默认 dev key 仅供本机试验）。
-
-## 测试
+## 5. Deploy & verify
 
 ```bash
-# 本地冒烟（自起隔离实例，24 项检查）
-python3 tests/test_smoke.py
-
-# 对运行中的实例做实机回归（在目标机上执行）
-python3 scripts/live_check.py --base http://127.0.0.1:18000 --agent http://127.0.0.1:18001 \
-  --scope /tmp/bicameral/data --expect-sha e24ff5fbc7141498
+HOST=<host> PORT=22 USER=root ./scripts/deploy.sh   # upload, restart, fingerprint check
+python3 scripts/live_check.py                        # 24-check regression on the deploy host
 ```
 
-## 部署
+`/healthz` exposes `build_sha` (the running source's fingerprint). A deployment counts as good only when the remote `build_sha` equals the local `sha256sum` — this has already caught one silent version drift.
 
-```bash
-# 以 bi150 为例：上传 → 重启 → 校验指纹（build_sha 与本地 sha256 逐位一致才算部署成功）
-scp -P 31451 bicameral/server.py root@<host>:/root/bicameral/server.py
-ssh -p 31451 root@<host> 'pkill -f "serve[r].py"; cd /root/bicameral && \
-  setsid nohup python3 server.py >poc.log 2>&1 </dev/null & sleep 2; \
-  curl -s http://127.0.0.1:18000/healthz'   # 对照本地 sha256sum 前 16 位
-```
+## 6. Boundaries (not solved here)
 
-`/healthz` 暴露 `build_sha`（运行源码指纹），根治「部署版本漂移无法核对」。
+- Schema-valid ≠ semantically correct: the factual accuracy of LLM output is out of scope for the permission layer.
+- The control plane (`/issue`, `/audit`) is unauthenticated by design in this release; production needs a trusted network segment or mTLS (see design doc §7).
+- Budget and nonce ledgers are in-memory: restart clears them (fail-closed direction), no persistence yet.
+- Throughput is unmeasured; all results above are functional and boundary verification.
 
-## 文档
+## 7. Design doc
 
-- [docs/architecture-v3.md](docs/architecture-v3.md) — 两院权限层完整设计（自含）：能力令牌 cap/3、拒绝码链、预算防线、审计、同机 Strata 整合、三轮红队实证、残余风险
-- [docs/architecture-v2.md](docs/architecture-v2.md) — 前身：六层云边架构（26 条评审修订）
+[docs/architecture.md](docs/architecture.md) — the full design: token format, deny-chain, budget defense, audit, co-located inference integration, three red-team rounds, residual risks.
 
 ## License
 

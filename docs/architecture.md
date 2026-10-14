@@ -1,6 +1,6 @@
-# 两院（Bicameral）：strata-jetson 主控-边缘权限层 v3（能力令牌 · default-deny 策略 · 同机 Strata 能力代理）
+# 两院（Bicameral）：主控-边缘权限层（能力令牌 · default-deny 策略 · 同机推理能力代理）
 
-> **文档定位**：自含完整稿，不要求读者读过 v1/v2。v1→v2（`docs/architecture-v2.md`）建立六层云边架构并经 26 条评审修订；v3 聚焦其 L5（工具与权限层），以「cap/3 能力令牌 PoC + 红队实证」驱动修订：第一轮纸面设计 → 第二轮 PoC 实现（`poc-master/server.py`）与红队攻击 → 本稿把全部攻防结论折进设计 → 第三轮 v0.2 修复 10 项并复测 17 条（§8），架构定名**两院（Bicameral）**（§9）。
+> **文档定位**：自含完整稿，不要求读者读过 v1/v2。v1→v2（`v2 历史稿（未随本仓库发布）`）建立六层云边架构并经 26 条评审修订；v3 聚焦其 L5（工具与权限层），以「cap/3 能力令牌 PoC + 红队实证」驱动修订：第一轮纸面设计 → 第二轮 PoC 实现（`poc-master/server.py`）与红队攻击 → 本稿把全部攻防结论折进设计 → 第三轮 v0.2 修复 10 项并复测 17 条（§8），架构定名**两院（Bicameral）**（§9）。
 > **证据标记约定**：**[实测]**=红队/独立复核在本机隔离实例跑出过；**[代码证实]**=本会话对 `poc-master/server.py` 逐行核对过（核对方式见 §4.3）；**[推断]**=逻辑推演，未经实验；**[任务输入]**=勘察/调研材料给出的外部事实。
 
 ---
@@ -25,7 +25,7 @@
 
 ### 0.3 从 v2 继承什么、补什么
 
-v2 L5（`docs/architecture-v2.md:154-178`，本会话已核对原文）已有：grant=token+lease（Ed25519 签名）、policy default-deny、derived/authored 工具参数权二分+taint、效果级幂等键（`:176`）、签发域覆盖校验（`:120`）。v3 确认方向成立 **[代码证实：v2 五洞在原文确实存在]**，并收口五个洞：
+v2 L5（`v2 历史稿（未随本仓库发布）:154-178`，本会话已核对原文）已有：grant=token+lease（Ed25519 签名）、policy default-deny、derived/authored 工具参数权二分+taint、效果级幂等键（`:176`）、签发域覆盖校验（`:120`）。v3 确认方向成立 **[代码证实：v2 五洞在原文确实存在]**，并收口五个洞：
 
 1. **预算只有时间维度**（ttl 300s+lease 3600s）→ v3 增加三维预算账本与尺寸上限（§2.3）；
 2. **token 无 jti/nonce**（防重放只靠 dispatcher 层 (task_id,attempt) 去重，`:146`）→ v3 令牌内建 jti+per-jti nonce 分区（§2.1/§2.2）；
@@ -79,7 +79,7 @@ v2 L5（`docs/architecture-v2.md:154-178`，本会话已核对原文）已有：
 
 格式：`b64url(payload_json) + "." + b64url(HMAC_SHA256(key, payload_b64))`。**没有 header/alg 字段**——alg=none / alg-confusion 攻击面从格式上不存在 **[实测+代码证实：`poc-master/server.py:230-242` 两段式 verify、`hmac.compare_digest` 常时比较；红队篡改保留签名→401、攻击者密钥自签→401 全部失败]**。验签失败（D1）时从 payload 解出 `claimed_jti` 记入审计并标注「未验签」（v3.1 新增，PoC 此前不记，`:570-573`）。
 
-PoC 用 HMAC 对称密钥（stdlib 可实现）；生产升级为 v2 X1 的 Ed25519 非对称签名（`docs/architecture-v2.md:204`），字段不变。
+PoC 用 HMAC 对称密钥（stdlib 可实现）；生产升级为 v2 X1 的 Ed25519 非对称签名（`v2 历史稿（未随本仓库发布）:204`），字段不变。
 
 | 字段 | 含义 | v3.1 相对 PoC 的修订 |
 |---|---|---|
@@ -142,7 +142,7 @@ PoC 用 HMAC 对称密钥（stdlib 可实现）；生产升级为 v2 X1 的 Ed25
 ### 2.3 预算与溢出防线
 
 - **三维账本**：`{calls, llm_calls, bytes}`，服务端按 jti 记账，`budget_take` 原子扣减且**先于 handler** **[实测：D13 失败也扣减预算、llm 维第 2 次调用 9ms 内 429 且确定未出网（`server.py:601→174-191`）]**——重试风暴打不到 Strata。账本落盘持久化（v3 新增，§7 R2：重启清零曾造成 fail-open 重放窗口；预算方向丢失本身是 fail-closed `:179-180`）。
-- **llm 并发闸**：`llm.complete` 加 `Semaphore(1)`+有界等待队列（对齐 v2 L4 admission，`docs/architecture-v2.md:148`），满→快速 D13/429。动机 **[推断，有部署实测佐证]**：LLM 超时 60s + ThreadingHTTPServer 无 worker 上限，Strata 变慢时线程与已扣不退的预算同步堆积。
+- **llm 并发闸**：`llm.complete` 加 `Semaphore(1)`+有界等待队列（对齐 v2 L4 admission，`v2 历史稿（未随本仓库发布）:148`），满→快速 D13/429。动机 **[推断，有部署实测佐证]**：LLM 超时 60s + ThreadingHTTPServer 无 worker 上限，Strata 变慢时线程与已扣不退的预算同步堆积。
 - **摘要回传原则（v3 收敛为单口）**：**内容进入模型上下文的唯一通道是 `llm.complete`**。`fs.read` 降级为「指纹+元数据」通道：返回 `{path(realpath), size, truncated, sha256, preview≤128B(消毒后)}`，不再回传 4KiB 全文。根因 **[实测·三方一致]**：PoC 的 `strip_smuggle` 只挂在 llm.complete 回复上（`:545-548`），`h_fs_read` 的 summary 原样回传全文（`:463-479`），投毒文件的 `actions`/`tool_calls` JSON 越权回流，SMUGGLE_STRIP 计数 0（§4.2/#3）。llm.complete 的回复继续过 strip_smuggle：命中即替换 `[STRATA:SMUGGLE_STRIPPED]`+审计 SMUGGLE_STRIP。
 - **熔断**：见 D16。**审计膨胀**：JSONL 1MiB×3 滚动 + 脱敏（§2.4）。
 
@@ -165,7 +165,7 @@ v3.1 对齐修订（PoC 三处未兑现 **[实测]**，`:545-548,570-573`）：
 3. **1MiB×3 滚动**——PoC 为无界追加；
 4. **D1 记 `claimed_jti`**——PoC 的 D1 拒绝行无 jti，攻击者自报身份不可追溯。
 
-脱敏原则不变：令牌串、prompt/文件内容原文永不落盘；完整链 = ISSUE→(ALLOW|DENY)*→BURN，按 (task_id, jti) 可重放（v2 阶段3验收「越权 100% 拒绝+审计」`docs/architecture-v2.md:303` 的可验证形态 **[实测：ISSUE/ALLOW/DENY 均带 jti/task_id/agent/tool/reason_code，grep 原始 audit.jsonl 证实不含令牌串与文件内容——唯一例外即上述 D12 样本，v3.1 修复]**）。
+脱敏原则不变：令牌串、prompt/文件内容原文永不落盘；完整链 = ISSUE→(ALLOW|DENY)*→BURN，按 (task_id, jti) 可重放（v2 阶段3验收「越权 100% 拒绝+审计」`v2 历史稿（未随本仓库发布）:303` 的可验证形态 **[实测：ISSUE/ALLOW/DENY 均带 jti/task_id/agent/tool/reason_code，grep 原始 audit.jsonl 证实不含令牌串与文件内容——唯一例外即上述 D12 样本，v3.1 修复]**）。
 
 ---
 
@@ -217,7 +217,7 @@ v3.1 对齐修订（PoC 三处未兑现 **[实测]**，`:545-548,570-573`）：
 | 8 | fs.write 幂等 | 缺 idem_key→400 D8；同键同内容同路径→200 deduplicated:true；同键异内容→拒绝（fail-closed） |
 | 9 | 审计链+脱敏主体 | ISSUE/ALLOW/DENY 带 jti/task_id/agent/tool/reason_code，(task_id,jti) 可串链；grep 原始 audit.jsonl 无令牌串与文件内容（唯一例外 D12 样本，见 §4.2/#6） |
 
-另 **[代码证实]**：设计文档对 v2 的全部引用核实无误（`docs/architecture-v2.md:156-163` 参数权二分/taint、`:165-174` grant+lease+Ed25519、`:176` 幂等、`:204` X1、`:120` 签发域校验、`:146` 去重、`:303` 阶段3验收、`:178` egress 局限）——v2 五洞清单成立，加固方向对应的洞在 v2 原文确实存在。
+另 **[代码证实]**：设计文档对 v2 的全部引用核实无误（`v2 历史稿（未随本仓库发布）:156-163` 参数权二分/taint、`:165-174` grant+lease+Ed25519、`:176` 幂等、`:204` X1、`:120` 签发域校验、`:146` 去重、`:303` 阶段3验收、`:178` egress 局限）——v2 五洞清单成立，加固方向对应的洞在 v2 原文确实存在。
 
 ### 4.2 被打穿的（8 项 broken；其中 4 项经独立复核 confirmed）
 
