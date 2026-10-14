@@ -1,0 +1,24 @@
+{
+  "schema": "bench-prompts/1",
+  "note": "范式阶段1-2 双机同档实测（四同原则之『同 prompt 集』）固定 8 条短 prompt。最终以先完成的 perf-jetson 记录（protocol.prompts）为准，bi150 侧逐字复用本集。",
+  "date": "2026-10-14",
+  "canon": "perf-jetson.json protocol.prompts (2026-10-14T10:40:37Z)",
+  "prompts": [
+    "The capital of France is",
+    "Write a haiku about rain.",
+    "Explain what a hash table is in one sentence.",
+    "1, 2, 3, 4,",
+    "Translate 'good morning' into French.",
+    "用一句话介绍冒泡排序。",
+    "List three primary colors.",
+    "Summarize the plot of Romeo and Juliet in two sentences."
+  ],
+  "genParams": {
+    "endpoint": "POST /completion (llama.cpp native, stream=true)",
+    "n_predict": 128,
+    "temperature": 0.0,
+    "cache_prompt": false,
+    "context": 2048,
+    "concurrency": 1
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "schema": "bench/1",
+  "device": "bi150",
+  "date": "2026-10-14",
+  "generated_at": "2026-10-14T10:45:56Z",
+  "engine": {
+    "name": "llama-server (llama.cpp)",
+    "version": "0.6.0-dev (build 1, commit 8c2134a)",
+    "build_info": "8c2134a-cpu (master 8c2134a8755d8a9792af513dab20282affe903e4, GGML_CUDA=OFF)",
+    "compiler": "GNU 13.3.0 for Linux x86_64",
+    "path": "/root/bicameral-sandbox/llama.cpp/build-cpu/bin/llama-server",
+    "sha256_16": "d59eab76dfbb7e8e",
+    "backend": "CPU only — corex CUDA build of same commit FAILED (structural gaps: cooperative_groups/reduce.h missing, cudaStreamWaitEvent signature mismatch, inline-asm llc crash; CoreX 4.4.0 = CUDA 10.2 era, no real nvcc, Iluvatar clang-18 __CUDA_ARCH__=300) — verdict of 攻坚员 2026-10-14"
+  },
+  "model": {
+    "name": "Qwen3-0.6B",
+    "file": "Qwen3-0.6B-Q8_0.gguf",
+    "path": "/root/bicameral-sandbox/models/Qwen3-0.6B-Q8_0.gguf",
+    "quantization": "Q8_0 (server /props model_ftype=Q8_0)",
+    "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+    "sha256_8": "9465e63a",
+    "size_bytes": 639446688,
+    "provenance": "downloaded this run from https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf (huggingface.co unreachable from bi150; hf 直连未成, 走镜像成功); GGUF magic verified; byte-identical to the jetson-side file (same sha256, same 639446688 B)",
+    "tokenizer_note": "prompt_n below is server-reported evaluated token count (Qwen3 tokenizer, native /completion so no chat template on either side)"
+  },
+  "server": {
+    "cmdline": "llama-server -m /root/bicameral-sandbox/models/Qwen3-0.6B-Q8_0.gguf --host 127.0.0.1 --port 29600 -c 2048 --parallel 1 -t 32",
+    "host": "127.0.0.1",
+    "port": 29600,
+    "n_ctx": 2048,
+    "n_ctx_slot": 2048,
+    "total_slots": 1,
+    "concurrency": 1,
+    "n_gpu_layers": 0,
+    "n_threads": 32,
+    "threads_evidence": "server log: 'llama threadpool init, n_threads = 32'; load_model: n_slots = 1, n_ctx_slot = 2048",
+    "thread_sweep_decode_tps": {"t8": 64.8, "t16": 91.4, "t32": 105.1, "t48": 94.8, "t64": 96.8, "note": "single probe prompt x2 repeats, 96 tok; 32 chosen (peak; 48/64 decline — dual-socket spill)"}
+  },
+  "protocol": {
+    "endpoint": "POST /completion (llama.cpp native, stream=true)",
+    "n_predict": 128,
+    "temperature": 0.0,
+    "cache_prompt": false,
+    "concurrency": 1,
+    "prompts": [
+      "The capital of France is",
+      "Write a haiku about rain.",
+      "Explain what a hash table is in one sentence.",
+      "1, 2, 3, 4,",
+      "Translate 'good morning' into French.",
+      "用一句话介绍冒泡排序。",
+      "List three primary colors.",
+      "Summarize the plot of Romeo and Juliet in two sentences."
+    ],
+    "warmup": "1 request before the 8 measured prompts (not counted)",
+    "prompts_canon": "adopted verbatim from perf-jetson.json protocol.prompts (their md: 供对端复用); shared copy at results/2026-10-14-probe-bench/prompts-8.json"
+  },
+  "per_prompt": [
+    {"prompt": "The capital of France is", "ttft_ms": 16.05, "prompt_n": 5, "prompt_ms": 13.386, "prefill_tps": 373.52, "predicted_n": 128, "predicted_ms": 1278.862, "decode_tps": 99.31, "client_decode_tps": 100.06},
+    {"prompt": "Write a haiku about rain.", "ttft_ms": 23.48, "prompt_n": 7, "prompt_ms": 14.465, "prefill_tps": 483.93, "predicted_n": 128, "predicted_ms": 1257.834, "decode_tps": 100.97, "client_decode_tps": 101.75},
+    {"prompt": "Explain what a hash table is in one sentence.", "ttft_ms": 25.58, "prompt_n": 11, "prompt_ms": 16.378, "prefill_tps": 671.63, "predicted_n": 128, "predicted_ms": 1264.69, "decode_tps": 100.42, "client_decode_tps": 101.2},
+    {"prompt": "1, 2, 3, 4,", "ttft_ms": 26.54, "prompt_n": 11, "prompt_ms": 17.248, "prefill_tps": 637.76, "predicted_n": 128, "predicted_ms": 1261.383, "decode_tps": 100.68, "client_decode_tps": 101.46},
+    {"prompt": "Translate 'good morning' into French.", "ttft_ms": 25.14, "prompt_n": 8, "prompt_ms": 15.753, "prefill_tps": 507.84, "predicted_n": 128, "predicted_ms": 1258.958, "decode_tps": 100.88, "client_decode_tps": 101.66},
+    {"prompt": "用一句话介绍冒泡排序。", "ttft_ms": 22.75, "prompt_n": 7, "prompt_ms": 13.446, "prefill_tps": 520.6, "predicted_n": 128, "predicted_ms": 1258.782, "decode_tps": 100.89, "client_decode_tps": 101.67},
+    {"prompt": "List three primary colors.", "ttft_ms": 22.17, "prompt_n": 5, "prompt_ms": 13.018, "prefill_tps": 384.08, "predicted_n": 128, "predicted_ms": 1256.817, "decode_tps": 101.05, "client_decode_tps": 101.83},
+    {"prompt": "Summarize the plot of Romeo and Juliet in two sentences.", "ttft_ms": 26.86, "prompt_n": 13, "prompt_ms": 17.807, "prefill_tps": 730.05, "predicted_n": 128, "predicted_ms": 1267.878, "decode_tps": 100.17, "client_decode_tps": 100.93}
+  ],
+  "summary": {
+    "ttft_ms": {"mean": 23.57, "median": 24.31, "min": 16.05, "max": 26.86},
+    "prefill_tps": {"mean": 538.68, "median": 514.22, "min": 373.52, "max": 730.05},
+    "decode_tps": {"mean": 100.55, "median": 100.78, "min": 99.31, "max": 101.05}
+  },
+  "metric_provenance": {
+    "ttft_ms": "client-side wall clock: t(first SSE chunk with non-empty content) - t(request sent), includes HTTP + server queue + full prefill",
+    "prefill_tps": "server-reported timings.prompt_per_second from final stream chunk",
+    "decode_tps": "server-reported timings.predicted_per_second from final stream chunk; cross-checked client-side (agrees within ~1%)",
+    "identical_protocol": "same endpoint/params/metric definitions as perf-jetson.json (native /completion, stream, n_predict=128, temperature=0, cache_prompt=false, 1 warmup)"
+  },
+  "comparable": true,
+  "comparability": {
+    "same_prompt_set": "8 prompts verbatim identical to perf-jetson.json protocol.prompts; prompt_n 5/7/11/11/8/7/5/13 matches jetson exactly (same tokenizer path, no chat template on either side)",
+    "same_quantization": "Q8_0 on both sides; model file byte-identical (sha256 9465e63a22add535…bb031, 639446688 B both sides)",
+    "same_context": "2048 on both sides (jetson /props n_ctx=2048; bi150 server log n_ctx_slot=2048)",
+    "same_concurrency": "1 on both sides (sequential requests, single slot)",
+    "caveats_not_part_of_four_same": "llama.cpp build differs (jetson b11062-3cf03257f vs bi150 master 8c2134a) and backend differs (CUDA vs CPU) — the measured subject; n_threads device-local (8 vs 32, each swept/locally optimal)"
+  },
+  "notes": [
+    "engine is the CPU fallback build (攻坚员 corex CUDA verdict: failed — CoreX 4.4.0/CUDA 10.2-era SDK cannot compile llama.cpp master CUDA backend; structural gaps, not flag-level)",
+    "model downloaded this run over hf-mirror (hf direct unreachable from bi150); result is the same official artifact as jetson's in-disk file",
+    "thread sweep t=8/16/32/48/64 → decode 64.8/91.4/105.1/94.8/96.8 tok/s; t=32 chosen (112 logical cores, 2-socket Xeon Gold 6330; beyond 32 threads spills across sockets)",
+    "all 8 generations ran to the n_predict=128 cap (predicted_n=128 everywhere, no EOS)",
+    "cache_prompt=false so every request prefills in full; temperature=0 greedy; single slot (total_slots=1)",
+    "client-side decode ~1.5% above server-reported (101.5 vs 100.55) — chunk-boundary effect; server timings used for the record, same as jetson side",
+    "red lines held: bound 127.0.0.1:29600 only (now released); running services 8080/8181/8960-8963/18000/18001 verified still listening, untouched (note: 8963 IS listening now, though absent at probe time); all artifacts under /root/bicameral-sandbox/",
+    "raw per-chunk data: results/2026-10-14-probe-bench/bench_raw_bi150.json (fetched from remote bench_raw_bi150.json)"
+  ]
+}

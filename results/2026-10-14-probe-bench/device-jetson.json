@@ -1,0 +1,715 @@
+{
+  "schema": "probe/1",
+  "generated_at": "2026-10-14T09:44:46Z",
+  "probe": {
+    "path": "/home/nvidia/code/Bicameral/bicameral/probe.py",
+    "sha256_16": "eb10063293b418a4",
+    "args": {
+      "no_egress": false,
+      "verify_hashes": false,
+      "model_dirs": [
+        "/home/nvidia/code/strata-jetson/work/zoo/gguf"
+      ]
+    }
+  },
+  "fingerprint": {
+    "machine_id": "5dbfb12414a3456d9014d88183e338b1",
+    "probe_sha256_16": "eb10063293b418a4",
+    "fingerprint_id": "5dbfb12414a3456d9014d88183e338b1-eb10063293b418a4"
+  },
+  "hardware": {
+    "host": {
+      "hostname": "nvidia-desktop",
+      "arch": "aarch64",
+      "cpu_model": "ARMv8 Processor rev 1 (v8l)",
+      "cpu_cores": 8,
+      "mem_total_bytes": 16415965184,
+      "mem_total_human": "15.3GiB"
+    },
+    "platform": "jetson",
+    "tegra_release": "# R36 (release), REVISION: 4.3, GCID: 38968081, BOARD: generic, EABI: aarch64, DATE: Wed Jan  8 01:49:37 UTC 2025",
+    "unified_memory": {
+      "value": true,
+      "evidence": "/etc/nv_tegra_release present (Tegra iGPU shares system DRAM); nvidia-smi memory.total=N/A (Orin (nvgpu), 540.4.0, 8.7, [N/A])"
+    },
+    "accelerators": [
+      {
+        "vendor_key": "NVIDIA",
+        "display": "NVIDIA",
+        "evidence": {
+          "dev_nodes": {
+            "dev_nodes": [
+              "/dev/nvidia-modeset",
+              "/dev/nvidia0",
+              "/dev/nvidiactl"
+            ],
+            "device_instances": 1
+          },
+          "lspci": [
+            {
+              "slot": "0001:00:00.0",
+              "vendor_key": "NVIDIA",
+              "vendor": "NVIDIA",
+              "vendor_id": "10de",
+              "device_id": "229e",
+              "line": "0001:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229e] (rev a1)"
+            },
+            {
+              "slot": "0004:00:00.0",
+              "vendor_key": "NVIDIA",
+              "vendor": "NVIDIA",
+              "vendor_id": "10de",
+              "device_id": "229c",
+              "line": "0004:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+            },
+            {
+              "slot": "0008:00:00.0",
+              "vendor_key": "NVIDIA",
+              "vendor": "NVIDIA",
+              "vendor_id": "10de",
+              "device_id": "229c",
+              "line": "0008:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+            }
+          ],
+          "tools": [
+            {
+              "tool": "nvidia-smi",
+              "path": "/usr/local/bin/nvidia-smi",
+              "gpu_query_csv": "Orin (nvgpu), 540.4.0, 8.7, [N/A]"
+            }
+          ]
+        }
+      },
+      {
+        "vendor_key": "DRM-generic",
+        "display": "DRM-generic",
+        "evidence": {
+          "dev_nodes": {
+            "dev_nodes": [
+              "/dev/dri/card0",
+              "/dev/dri/card1",
+              "/dev/dri/renderD128",
+              "/dev/dri/renderD129"
+            ],
+            "device_instances": 4
+          }
+        }
+      }
+    ],
+    "accel_enumeration_order": [
+      "/dev node scan",
+      "lspci vendor table",
+      "vendor tools"
+    ],
+    "dev_nodes_by_vendor": {
+      "NVIDIA": {
+        "dev_nodes": [
+          "/dev/nvidia-modeset",
+          "/dev/nvidia0",
+          "/dev/nvidiactl"
+        ],
+        "device_instances": 1
+      },
+      "DRM-generic": {
+        "dev_nodes": [
+          "/dev/dri/card0",
+          "/dev/dri/card1",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD129"
+        ],
+        "device_instances": 4
+      }
+    },
+    "lspci": {
+      "tool": "lspci",
+      "status": "present",
+      "vendor_table": {
+        "10de": "NVIDIA",
+        "1e3e": "Iluvatar / 天数智芯",
+        "19e5": "Huawei Ascend / 昇腾",
+        "1002": "AMD / Hygon 海光",
+        "126f": "Moore Threads / 摩尔线程"
+      },
+      "matches": [
+        {
+          "slot": "0001:00:00.0",
+          "vendor_key": "NVIDIA",
+          "vendor": "NVIDIA",
+          "vendor_id": "10de",
+          "device_id": "229e",
+          "line": "0001:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229e] (rev a1)"
+        },
+        {
+          "slot": "0004:00:00.0",
+          "vendor_key": "NVIDIA",
+          "vendor": "NVIDIA",
+          "vendor_id": "10de",
+          "device_id": "229c",
+          "line": "0004:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+        },
+        {
+          "slot": "0008:00:00.0",
+          "vendor_key": "NVIDIA",
+          "vendor": "NVIDIA",
+          "vendor_id": "10de",
+          "device_id": "229c",
+          "line": "0008:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+        }
+      ]
+    },
+    "vendor_tools": [
+      {
+        "tool": "nvidia-smi",
+        "vendor": "NVIDIA",
+        "status": "present",
+        "path": "/usr/local/bin/nvidia-smi",
+        "source": "PATH",
+        "run": {
+          "status": "ok",
+          "code": 0,
+          "output": "Wed Oct 14 17:44:35 2026       \n+---------------------------------------------------------------------------------------+\n| NVIDIA-SMI 540.4.0                Driver Version: 540.4.0      CUDA Version: 12.6     |\n|-----------------------------------------+----------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |\n|                                         |                      |               MIG M. |\n…"
+        },
+        "gpu_query_csv": "Orin (nvgpu), 540.4.0, 8.7, [N/A]"
+      },
+      {
+        "tool": "tegrastats",
+        "vendor": "NVIDIA platform",
+        "status": "present",
+        "path": "/usr/bin/tegrastats",
+        "source": "PATH",
+        "run": {
+          "status": "timeout",
+          "error": "timeout after 5s (streaming tool?)",
+          "output": "10-14-2026 17:44:36 RAM 4873/15655MB (lfb 364x4MB) SWAP 1139/7828MB (cached 1MB) CPU [40%@1984,4%@1984,0%@1984,0%@1984,0%@1984,2%@1984,1%@1984,65%@1984] GR3D_FREQ 0% cv0@47.281C cpu@51.468C soc2@46.12\n10-14-2026 17:44:37 RAM 4874/15655MB (lfb 364x4MB) SWAP 1139/7828MB (cached 1MB) CPU [27%@1984,18%@1984,2%@1984,7%@1984,0%@1984,0%@1984,31%@1984,65%@1984] GR3D_FREQ 0% cv0@47.281C cpu@51.437C soc2@46.\n…"
+        },
+        "gpu_query_csv": "Unknown command: --query-gpu=name,driver_version,compute_cap,memory.total. Please try again or see --help"
+      },
+      {
+        "tool": "jetson_clocks",
+        "vendor": "NVIDIA platform",
+        "status": "present",
+        "path": "/usr/bin/jetson_clocks",
+        "source": "PATH",
+        "run": {
+          "status": "nonzero",
+          "code": 1,
+          "output": "Error: Run this script(/usr/bin/jetson_clocks) as a root user"
+        },
+        "gpu_query_csv": "\u001b[0;31mUnknown option: --query-gpu=name,driver_version,compute_cap,memory.total\u001b[0m\n\nMaximize jetson performance by setting static max frequency to CPU, GPU and EMC clocks.\nUsage:\njetson_clocks [options]\n  options,\n  --help, -h         show this help message\n  --show             display current settings\n  --fan              set PWM fan speed to maximal\n  --store [file]     store current settings to a file (default: ${HOME}/l4t_dfs.conf)\n  --restore [file]   restore saved settings from a file (default: ${HOME}/l4t_dfs.conf)\n…"
+      },
+      {
+        "tool": "ixsmi",
+        "vendor": "Iluvatar",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "npu-smi",
+        "vendor": "Ascend",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "rocm-smi",
+        "vendor": "AMD-Hygon",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "hy-smi",
+        "vendor": "AMD-Hygon",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "musa-smi",
+        "vendor": "Moore-Threads",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "mthreads-gmi",
+        "vendor": "Moore-Threads",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      }
+    ]
+  },
+  "stack": {
+    "os": {
+      "pretty_name": "Ubuntu 22.04.5 LTS",
+      "version_id": "22.04",
+      "id": "ubuntu"
+    },
+    "kernel": "5.15.148-tegra",
+    "container": {
+      "dot_dockerenv": false,
+      "dot_containerenv": false,
+      "cgroup_hits": [],
+      "kubernetes_env": false,
+      "is_container": false
+    },
+    "runtimes": {
+      "cuda": {
+        "status": "present",
+        "nvcc": "/usr/local/cuda/bin/nvcc",
+        "source": "/usr/local/cuda/bin",
+        "version": "12.6",
+        "nvcc_full": "12.6.68",
+        "probe": null
+      },
+      "nvidia_smi_reported": {
+        "name": "Orin (nvgpu)",
+        "driver_version": "540.4.0",
+        "compute_cap": "8.7",
+        "memory_total": "[N/A]"
+      },
+      "rocm": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/rocm*/.info/version",
+          "/opt/rocm*/.info/version"
+        ]
+      },
+      "cann": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/[Aa]scend/ascend-toolkit/latest/version.cfg",
+          "/usr/local/[Aa]scend/nnal/atb/latest/version.cfg",
+          "/usr/local/[Aa]scend/aascend-toolkit/latest/version.cfg"
+        ]
+      },
+      "corex": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/corex*/version",
+          "/usr/local/corex*/version.*"
+        ]
+      }
+    },
+    "python": {
+      "version": "3.11.14",
+      "executable": "/home/nvidia/miniconda3/bin/python3",
+      "venv_importable": true,
+      "ensurepip_importable": true
+    },
+    "egress": {
+      "targets": {
+        "github_ssh_443": {
+          "status": "up",
+          "latency_ms": 73
+        },
+        "hf_mirror": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 441
+        },
+        "pypi": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 446
+        },
+        "hf": {
+          "status": "down",
+          "error": "URLError: <urlopen error [Errno 101] Network is unreachable>",
+          "latency_ms": 5207
+        },
+        "github": {
+          "status": "down",
+          "error": "URLError: <urlopen error timed out>",
+          "latency_ms": 5214
+        }
+      },
+      "summary": "pypi:up hf:down hf_mirror:up github:down github_ssh_443:up"
+    }
+  },
+  "installed": {
+    "engines": [
+      {
+        "name": "llama-server",
+        "status": "absent",
+        "searched_dir_count": 17
+      },
+      {
+        "name": "vllm",
+        "status": "absent",
+        "searched_dir_count": 17,
+        "python_package_version": null
+      },
+      {
+        "name": "strata",
+        "status": "absent",
+        "searched_dir_count": 17
+      }
+    ],
+    "models": {
+      "roots_considered": [
+        {
+          "path": "/home/nvidia/models",
+          "exists": true,
+          "origin": "convention"
+        },
+        {
+          "path": "/data/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/opt/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/mnt/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/srv/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/workspace/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/home/nvidia/.cache/huggingface/hub",
+          "exists": true,
+          "origin": "convention"
+        },
+        {
+          "path": "/home/nvidia/.cache/lm-studio/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf",
+          "exists": true,
+          "origin": "cli"
+        }
+      ],
+      "roots_scanned": [
+        "/home/nvidia/models",
+        "/home/nvidia/.cache/huggingface/hub",
+        "/home/nvidia/code/strata-jetson/work/zoo/gguf"
+      ],
+      "count": 8,
+      "count_note": "complete",
+      "truncated": false,
+      "total_bytes": 8313975424,
+      "total_human": "7.7GiB",
+      "by_format": {
+        "gguf": 8,
+        "safetensors": 0
+      },
+      "models": [
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/Qwen3-0.6B-Q8_0.gguf",
+          "format": "gguf",
+          "size_bytes": 639446688,
+          "size_human": "609.8MiB",
+          "quantization": "Q8_0",
+          "gguf_magic_ok": true
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/openelm-1.1b.gguf",
+          "format": "gguf",
+          "size_bytes": 678879552,
+          "size_human": "647.4MiB",
+          "quantization": null,
+          "gguf_magic_ok": true
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/openelm-270m.gguf",
+          "format": "gguf",
+          "size_bytes": 176344480,
+          "size_human": "168.2MiB",
+          "quantization": null,
+          "gguf_magic_ok": true
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/openelm-3b.gguf",
+          "format": "gguf",
+          "size_bytes": 1888893536,
+          "size_human": "1.8GiB",
+          "quantization": null,
+          "gguf_magic_ok": true
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/openelm-450m.gguf",
+          "format": "gguf",
+          "size_bytes": 292895808,
+          "size_human": "279.3MiB",
+          "quantization": null,
+          "gguf_magic_ok": true
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/qwen35-0.8b.gguf",
+          "format": "gguf",
+          "size_bytes": 541903776,
+          "size_human": "516.8MiB",
+          "quantization": null,
+          "gguf_magic_ok": true
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/qwen35-2b.gguf",
+          "format": "gguf",
+          "size_bytes": 1312164768,
+          "size_human": "1.2GiB",
+          "quantization": null,
+          "gguf_magic_ok": true
+        },
+        {
+          "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/qwen35-4b.gguf",
+          "format": "gguf",
+          "size_bytes": 2783446816,
+          "size_human": "2.6GiB",
+          "quantization": null,
+          "gguf_magic_ok": true
+        }
+      ]
+    },
+    "services": {
+      "tool": "ss -tln",
+      "listener_count": 7,
+      "listeners": [
+        {
+          "port": 22,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 53,
+          "addrs": [
+            "127.0.0.53%lo"
+          ]
+        },
+        {
+          "port": 111,
+          "addrs": [
+            "0.0.0.0",
+            "[::]"
+          ]
+        },
+        {
+          "port": 631,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 18000,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 18001,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 34063,
+          "addrs": [
+            "127.0.0.1"
+          ]
+        }
+      ],
+      "cross_check": [
+        {
+          "port": 22,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": null,
+            "error": "BadStatusLine: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.13\r\n"
+          },
+          "v1_models": {
+            "http_status": null,
+            "model_ids": [],
+            "error": "BadStatusLine: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.13\r\n"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 53,
+          "listen_addrs": [
+            "127.0.0.53%lo"
+          ],
+          "health": {
+            "http_status": null,
+            "error": "URLError: <urlopen error [Errno 111] Connection refused>"
+          },
+          "v1_models": {
+            "http_status": null,
+            "model_ids": [],
+            "error": "URLError: <urlopen error [Errno 111] Connection refused>"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 111,
+          "listen_addrs": [
+            "0.0.0.0",
+            "[::]"
+          ],
+          "health": {
+            "http_status": null,
+            "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+          },
+          "v1_models": {
+            "http_status": null,
+            "model_ids": [],
+            "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 631,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": 404,
+            "error": "endpoint answered with HTTP error"
+          },
+          "v1_models": {
+            "http_status": 404,
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 18000,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": 404,
+            "error": "endpoint answered with HTTP error"
+          },
+          "v1_models": {
+            "http_status": 404,
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 18001,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": 404,
+            "error": "endpoint answered with HTTP error"
+          },
+          "v1_models": {
+            "http_status": 404,
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 34063,
+          "listen_addrs": [
+            "127.0.0.1"
+          ],
+          "health": {
+            "http_status": 404,
+            "error": "endpoint answered with HTTP error"
+          },
+          "v1_models": {
+            "http_status": 404,
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        }
+      ],
+      "inference_services": [],
+      "note": "each listening port cross-checked with GET /health and GET /v1/models (§3.1 #3)"
+    }
+  },
+  "install_state": [],
+  "notes": [
+    "no --appspec supplied (standalone run): install_state is defined against master-issued appspec/1, reported as []"
+  ],
+  "supplement": {
+    "schema": "probe/1+review-supplement/1",
+    "added_by": "复核 subagent（盘点员·jetson），2026-10-14",
+    "why": "§3.1 installed 节按安装语义（PATH + 安装根 + 约定模型目录）如实记 llama-server/vllm/strata=absent、模型=0；但本机在盘存在已构建引擎与模型动物园，不在探测范围内。本节补充其版本/指纹/位置，全部由本会话直接执行命令取证，非探针自动输出。",
+    "engines_on_disk": [
+      {
+        "name": "llama.cpp (CUDA build)",
+        "binary": "/home/nvidia/code/strata-jetson/work/llama-build/bin/llama-server",
+        "version": "0.4.1-dev (build 11062, commit 3cf03257f), GNU 11.4.0, Linux aarch64",
+        "sha256_16": "8ea353d9d67439be",
+        "extras": [
+          {
+            "binary": "/home/nvidia/code/strata-jetson/work/llama-build/bin/llama-cli",
+            "sha256_16": "9e1615490d71f207"
+          },
+          {
+            "note": "动态链接 libggml-cuda.so.0.24.0 (220MB, 2026-10-12 构建)，需 LD_LIBRARY_PATH 指向 bin/ 或系统安装"
+          }
+        ],
+        "evidence": "命令: /home/nvidia/code/strata-jetson/work/llama-build/bin/llama-server --version; sha256sum"
+      },
+      {
+        "name": "strata (build, 基线)",
+        "binary": "/home/nvidia/code/strata-jetson/work/Strata/build/strata",
+        "version": "strata 0.1.43",
+        "sha256_16": "1d12ee90ad4e5ef1",
+        "evidence": "命令: /home/nvidia/code/strata-jetson/work/Strata/build/strata --version; sha256sum"
+      },
+      {
+        "name": "strata (build-cuda12)",
+        "binary": "/home/nvidia/code/strata-jetson/work/Strata/build-cuda12/strata",
+        "version": "strata 0.1.43",
+        "sha256_16": "141a9e851c5a0642",
+        "evidence": "命令: /home/nvidia/code/strata-jetson/work/Strata/build-cuda12/strata --version; sha256sum"
+      },
+      {
+        "name": "strata (engine-cuda12, 部署副本)",
+        "binary": "/home/nvidia/code/strata-jetson/work/Strata/engine-cuda12/strata",
+        "version": "strata 0.1.43",
+        "sha256_16": "141a9e851c5a0642",
+        "note": "sha256 与 build-cuda12/strata 完全一致（141a9e851c5a0642…）——同一构建的部署副本",
+        "evidence": "命令: sha256sum 两者相等"
+      }
+    ],
+    "model_zoo": {
+      "directory": "/home/nvidia/code/strata-jetson/work/zoo/gguf",
+      "on_disk_now": "8 个 .gguf / 7.7GiB（已入上节 installed.models，GGUF magic 全部有效）；其中 7 个属 ZOO 目录（qwen35×3、openelm×4），1 个非 ZOO 条目：Qwen3-0.6B-Q8_0.gguf",
+      "catalog": "scripts/run_zoo.py ZOO 表 = 19 个开源模型条目；results/summary_perf.csv = 19 行成绩；README §3.3 表 20 行 = 19 zoo 模型 + strata Q2_0（「20 模型对照」出处）",
+      "note": "其余 12 个 ZOO 条目权重不在盘，成绩留档；复跑用 run_zoo.py fetch <name> （modelscope 优先、hf-mirror 兜底，优先 Q4_K_M，转换路径量化 Q4_K_M；故在盘 zoo 文件名不带量化后缀，探针按名判读量化记 null 属预期）",
+      "evidence": "命令: find work/zoo -name '*.gguf' | wc -l → 8; python3 统计 ZOO 条目 → 19; wc -l results/summary_perf.csv → 20(含表头)",
+      "caveat": "在盘 7 个 ZOO 文件与 summary_perf.csv 记录的 benched size 全部不一致（在盘版本略大，如 qwen35-4b 2,783,446,816 vs benched 2,772,477,952）——是重新拉取/转换的副本，不是当时受测的字节；引用 bench 成绩须以成绩当时的文件为准，不得默认等同在盘文件"
+    }
+  }
+}

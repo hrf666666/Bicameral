@@ -1,0 +1,198 @@
+{
+  "schema": "bench/1",
+  "device": "jetson",
+  "date": "2026-10-14",
+  "generated_at": "2026-10-14T10:40:37Z",
+  "engine": {
+    "name": "llama-server (llama.cpp)",
+    "version": "0.4.1-dev (build 11062, commit 3cf03257f)",
+    "build_info": "b11062-3cf03257f",
+    "compiler": "GNU 11.4.0 for Linux aarch64",
+    "path": "/home/nvidia/code/strata-jetson/work/llama-build/bin/llama-server",
+    "sha256_16": "8ea353d9d67439be",
+    "backend": "CUDA (libggml-cuda.so.0.24.0, libcudart.so.12, libcuda driver API 12.6)",
+    "jetpack": "R36.4.3 (Jetson Linux, tegra)"
+  },
+  "model": {
+    "name": "Qwen3-0.6B",
+    "file": "Qwen3-0.6B-Q8_0.gguf",
+    "path": "/home/nvidia/code/strata-jetson/work/zoo/gguf/Qwen3-0.6B-Q8_0.gguf",
+    "quantization": "Q8_0 (server /props model_ftype=Q8_0)",
+    "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+    "sha256_8": "9465e63a",
+    "size_bytes": 639446688,
+    "provenance": "already on disk (mtime 2026-10-12 22:04, the non-ZOO file of the probe inventory); GGUF magic verified; no re-download needed",
+    "tokenizer_note": "prompt_n below is server-reported evaluated token count (Qwen3 tokenizer)"
+  },
+  "server": {
+    "cmdline": "llama-server -m work/zoo/gguf/Qwen3-0.6B-Q8_0.gguf --host 127.0.0.1 --port 18888 -c 2048 -ngl 99 --parallel 1",
+    "host": "127.0.0.1",
+    "port": 18888,
+    "n_ctx": 2048,
+    "n_ctx_seq": 2048,
+    "total_slots": 1,
+    "concurrency": 1,
+    "n_gpu_layers": 99,
+    "n_threads": 8,
+    "gpu_offload_evidence": "tegrastats GR3D_FREQ 89-96% during generation (idle 0%); RAM 5021/15655MB unified"
+  },
+  "protocol": {
+    "endpoint": "POST /completion (llama.cpp native, stream=true)",
+    "n_predict": 128,
+    "temperature": 0.0,
+    "cache_prompt": false,
+    "concurrency": 1,
+    "prompts": [
+      "The capital of France is",
+      "Write a haiku about rain.",
+      "Explain what a hash table is in one sentence.",
+      "1, 2, 3, 4,",
+      "Translate 'good morning' into French.",
+      "用一句话介绍冒泡排序。",
+      "List three primary colors.",
+      "Summarize the plot of Romeo and Juliet in two sentences."
+    ],
+    "warmup": "1 request before the 8 measured prompts (not counted)"
+  },
+  "per_prompt": [
+    {
+      "prompt": "The capital of France is",
+      "ttft_ms": 25.11,
+      "prompt_n": 5,
+      "prompt_ms": 17.61,
+      "prefill_tps": 283.93,
+      "predicted_n": 128,
+      "predicted_ms": 1879.83,
+      "decode_tps": 67.56,
+      "client_decode_tps": 67.55,
+      "content_preview": ""
+    },
+    {
+      "prompt": "Write a haiku about rain.",
+      "ttft_ms": 27.82,
+      "prompt_n": 7,
+      "prompt_ms": 20.4,
+      "prefill_tps": 343.07,
+      "predicted_n": 128,
+      "predicted_ms": 1889.12,
+      "decode_tps": 67.23,
+      "client_decode_tps": 67.23,
+      "content_preview": ""
+    },
+    {
+      "prompt": "Explain what a hash table is in one sentence.",
+      "ttft_ms": 50.38,
+      "prompt_n": 11,
+      "prompt_ms": 41.88,
+      "prefill_tps": 262.64,
+      "predicted_n": 128,
+      "predicted_ms": 1882.99,
+      "decode_tps": 67.45,
+      "client_decode_tps": 67.44,
+      "content_preview": ""
+    },
+    {
+      "prompt": "1, 2, 3, 4,",
+      "ttft_ms": 26.09,
+      "prompt_n": 11,
+      "prompt_ms": 18.03,
+      "prefill_tps": 610.13,
+      "predicted_n": 128,
+      "predicted_ms": 1886.64,
+      "decode_tps": 67.32,
+      "client_decode_tps": 67.31,
+      "content_preview": ""
+    },
+    {
+      "prompt": "Translate 'good morning' into French.",
+      "ttft_ms": 29.28,
+      "prompt_n": 8,
+      "prompt_ms": 21.71,
+      "prefill_tps": 368.54,
+      "predicted_n": 128,
+      "predicted_ms": 1880.22,
+      "decode_tps": 67.55,
+      "client_decode_tps": 67.53,
+      "content_preview": ""
+    },
+    {
+      "prompt": "用一句话介绍冒泡排序。",
+      "ttft_ms": 27.88,
+      "prompt_n": 7,
+      "prompt_ms": 20.16,
+      "prefill_tps": 347.17,
+      "predicted_n": 128,
+      "predicted_ms": 1879.3,
+      "decode_tps": 67.58,
+      "client_decode_tps": 67.57,
+      "content_preview": ""
+    },
+    {
+      "prompt": "List three primary colors.",
+      "ttft_ms": 25.42,
+      "prompt_n": 5,
+      "prompt_ms": 18.03,
+      "prefill_tps": 277.28,
+      "predicted_n": 128,
+      "predicted_ms": 1873.54,
+      "decode_tps": 67.79,
+      "client_decode_tps": 67.78,
+      "content_preview": ""
+    },
+    {
+      "prompt": "Summarize the plot of Romeo and Juliet in two sentences.",
+      "ttft_ms": 26.15,
+      "prompt_n": 13,
+      "prompt_ms": 18.43,
+      "prefill_tps": 705.18,
+      "predicted_n": 128,
+      "predicted_ms": 1885.5,
+      "decode_tps": 67.36,
+      "client_decode_tps": 67.34,
+      "content_preview": ""
+    }
+  ],
+  "summary": {
+    "ttft_ms": {
+      "mean": 29.77,
+      "median": 26.98,
+      "min": 25.11,
+      "max": 50.38
+    },
+    "prefill_tps": {
+      "mean": 399.74,
+      "median": 345.12,
+      "min": 262.64,
+      "max": 705.18
+    },
+    "decode_tps": {
+      "mean": 67.48,
+      "median": 67.5,
+      "min": 67.23,
+      "max": 67.79
+    }
+  },
+  "metric_provenance": {
+    "ttft_ms": "client-side wall clock: t(first SSE chunk with non-empty content) - t(request sent), includes HTTP + server queue + full prefill",
+    "prefill_tps": "server-reported timings.prompt_per_second from final stream chunk",
+    "decode_tps": "server-reported timings.predicted_per_second from final stream chunk; cross-checked client-side (agrees within 0.1%)"
+  },
+  "comparable": false,
+  "comparability": {
+    "same_prompt_set": false,
+    "same_prompt_set_detail": "bi150 dropped a canonical set results/2026-10-14-probe-bench/prompts-8.json (schema bench-prompts/1) at 18:38 local - mid-flight of this pipeline (server up ~18:37, warmup 18:38:12, measured run 18:39-18:40:37Z+8); first read after server teardown. Per that file's own fallback clause, this record keeps its self-chosen set; both sides quote full prompt sets for the aggregator to judge. Sets differ: shared verbatim only 'Translate 'good morning' into French.'; near-duplicates #1/#7/#8; distinct #2/#3/#4/#6.",
+    "same_quantization": "aligned by protocol (both instructed Qwen3-0.6B GGUF Q8_0); verify against bi150's recorded sha256 (this file: 9465e63a)",
+    "same_context": true,
+    "same_concurrency": true
+  },
+  "notes": [
+    "model not downloaded this run: Qwen3-0.6B-Q8_0.gguf was already on disk (inventory: the non-ZOO file among 8 ggufs); used as instructed, no substitution",
+    "prefill tok/s is noisy (262-705) because each prompt is only 5-13 tokens; decode (67.23-67.79, +/-0.6%) and TTFT (mean 29.77ms) are the stable figures",
+    "all 8 generations ran to the n_predict=128 cap (predicted_n=128 everywhere, no EOS)",
+    "cache_prompt=false so every request prefills in full; temperature=0 greedy; single slot (total_slots=1)",
+    "in-disk file bytes differ from results/summary_perf.csv benched sizes (re-pulled copy per inventory surprises) - these numbers are measured against this file's sha256, not the csv row",
+    "comparable=false because the prompt-set dimension of the four-same fails: bi150's canonical prompts-8.json (mtime 18:38 local, during this run) differs from this record's self-chosen set; per prompts-8.json's own fallback clause the self-chosen set stands and the aggregator judges four-same; quant/ctx-2048/concurrency-1 align on both sides",
+    "methodology divergence worth the aggregator's attention: bi150's bench8.py measures via /v1/chat/completions (chat template, Qwen3 thinking enabled by default) with client-derived metrics (prefill = prompt_tokens/TTFT, decode = completion_tokens/(total-TTFT)); this record uses native /completion (raw prompt, no template) with server timings from the final stream chunk - numbers are not metric-identical even on the same prompts",
+    "server killed after measurement (pid 3935178, port 18888 released)"
+  ]
+}

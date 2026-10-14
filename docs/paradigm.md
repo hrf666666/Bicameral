@@ -27,8 +27,8 @@
 |---|---|---|
 | 架构 | aarch64，CUDA sm_87，JetPack 6.2 / CUDA 12.6 | x86_64，112 核 / 1 TB 内存 |
 | 加速器 | 统一内存 GPU（MAXN_SUPER，14.4 W） | 8× 天数智芯 Iluvatar BI-V150（corex-4.4.0 + CUDA 10.2 兼容层） |
-| 厂商工具怪癖 | `jetson_clocks`/tegrastats | `ixsmi` **不在 PATH**，需 `LD_LIBRARY_PATH=/usr/local/corex/lib:…`；lspci 厂商 ID `1e3e` |
-| 推理栈 | llama.cpp CUDA 构建；Strata NEON 移植（125B MoE Q2_0，6.31 tok/s 实测） | 4× llama-server（:8960-8963，Qwen3 27B GGUF，`-c 32768 -np 64`） |
+| 厂商工具怪癖 | `jetson_clocks`/tegrastats | `ixsmi` 实际在 `/usr/local/corex/bin/ixsmi`（不在 PATH，probe 经 corex 根搜索定位并注入 LD 后 run ok）**[事实]**：无 `LD_LIBRARY_PATH` 时 exit 127 缺 libixml.so；注入 `/usr/local/corex/lib`（→lib64 符号链）即 exit 0；**`/usr/local/iluvatar/lib` 是空目录**（libixml.so 在两处 lib64，md5 相同）——本表旧记载的 LD 路径已于 2026-10-14 受控实验（A–E 五组对照）勘误；lspci 厂商 ID `1e3e`（pod 容器内 lspci 零命中，发现靠 `/dev/iluvatar*` + 工具） |
+| 推理栈 | llama.cpp CUDA 构建（0.4.1-dev b11062 3cf03257f，sha256_16 `8ea353d9d67439be`）；Strata NEON 移植（125B MoE Q2_0，6.31 tok/s 实测） | probe 实测 2026-10-14 **[事实]**：8960/8961/8962 三个 llama-server 在监听（/health + /v1/models 双 200，同一 `/private/models/Qwen3.8-27B-UD-Q4_K_M.gguf`），8963 盘点时刻未监听（bench 时刻又在监听——服务集是动态的）；服务跑在**同 pod 兄弟容器**（共享 netns、隔离 PID/fs：本容器引擎二进制 absent 而 /proc 只有 defunct）；旧记「4×、`-c 32768 -np 64`」参数探针未取证，不作为事实引用 |
 | 网络 | HuggingFace 走 hf-mirror，GitHub 走 SSH-over-443 **[事实]**：出网路径不可假设统一 | pip 外网可用；外部仅映射 ssh 31451 |
 | 已验证 | 20 模型性能/质量对照方法论（strata-jetson） | Bicameral 权限层 v0.2 + 红队三轮 |
 
@@ -74,7 +74,7 @@
 
 由 DeviceReport 推导「能装什么」，规则表公开可审：
 
-- 后端矩阵：arch × 加速器类型 × 运行时 → 可用引擎构建（例：`aarch64+sm_87 → llama.cpp CUDA；x86_64+corex → 待测（CUDA 10.2 兼容层能否跑 llama.cpp 是 **[待测]** 头号问题）`）;
+- 后端矩阵：arch × 加速器类型 × 运行时 → 可用引擎构建（例：`aarch64+sm_87 → llama.cpp CUDA` **[事实] 2026-10-14**：在盘构建 0.4.1-dev b11062 端到端跑通 bench，-ngl 99 GPU offload 由 tegrastats 取证；`x86_64+corex4.4.0 → llama.cpp CUDA` **被否**：master 8c2134a8 编译失败，结构性缺口（cooperative_groups/reduce.h 缺失、cudaStreamWaitEvent 签名不匹配 ×5、inline asm llc 崩溃），SDK 无真 nvcc、真编译器 Iluvatar clang-18 ivcore11、设备编译期 `__CUDA_ARCH__=300` 与运行时 cc 7.1 不符（fp16 内核有被裁的静默数值风险）；`x86_64+corex → llama.cpp CPU` **[事实]**：同 commit CPU 构建可用，decode 100.55 tok/s @ Qwen3-0.6B Q8_0）;
 - 模型档位：内存预算分档（≤4G / ≤16G / ≤64G / 海量 NVMe 流式——Strata 的专家流式就是第四档 **[事实]**）;
 - 此层只生成「候选」，**路由永不直接采信**——必须等 3.3 实测。
 
@@ -132,8 +132,8 @@
 
 | 阶段 | 交付 | 验收门（不达不进下一阶段） |
 |---|---|---|
-| 1 | probe/1 探针单文件 | 在 Jetson 与 bi150 各产出一份 DeviceReport；两份报告能互相解释对方的部署选项（如「bi150 能否跑 llama.cpp」由报告回答，不由我回答） |
-| 2 | bench/1 套件 | 同一模型档在两机产出可比 PerfRecord（四同原则） |
+| 1 | probe/1 探针单文件 | 在 Jetson 与 bi150 各产出一份 DeviceReport；两份报告能互相解释对方的部署选项（如「bi150 能否跑 llama.cpp」由报告回答，不由我回答）——**达成 2026-10-14**：device-jetson（本仓 `results/2026-10-14-probe-bench/`，含 review-supplement 节）+ device-bi150（strata-jetson 仓同名目录），两机探针同一文件（sha256_16 `eb10063293b418a4` 可外部校验）；「bi150 能否跑 llama.cpp」由报告事实 + 攻坚实测回答：CUDA 被否 / CPU 可用；判定与逐项证据见 strata-jetson `results/2026-10-14-probe-bench/README.md` §5（局限注记：探针引擎扫描仅 PATH+安装根，在盘构建以 supplement 节分列） |
+| 2 | bench/1 套件 | 同一模型档在两机产出可比 PerfRecord（四同原则）——**达成 2026-10-14**：Qwen3-0.6B Q8_0 双机 perf 记录（perf-jetson.json / perf-bi150.json，在 strata-jetson 仓 results/2026-10-14-probe-bench/），四同经程序化复验成立（8 条 prompt 逐字一致且逐条 prompt_n 相同、模型 sha256 全串相等、ctx 2048 双方服务端字段互证、并发 1 单 slot），对照表见同上 README §3；结果：bi150 CPU decode 100.55 tok/s ≈ 1.49× jetson CUDA 67.48；perf-jetson 内保留的 `comparable:false` 为流水线中途痕迹，最终以归档证据裁定可比 |
 | 3 | appspec/1 + install.apply PoC | 一条指令把一台 `absent` 设备变 `ready`，全程审计可查、失败可回滚 |
 | 4 | task/1 + 路由 PoC | 同一 task 在两台设备各执行一次：结果 schema 一致，`ROUTE` 审计含候选与理由 |
 | 5 | 红队轮 | 按 §5 清单实攻，全部折入修复后才算 v1.0 |
@@ -142,8 +142,8 @@
 
 ## 7. 明确不假设清单（「不要想当然」落款）
 
-1. **不假设厂商 NPU 有可用推理引擎**——昇腾/CANN、摩尔线程、海光各自生态以 L1 探测 + L3 实测为准；bi150 的 corex 能否跑 llama.cpp 是阶段 1 的头号 **[待测]**。
-2. **不假设出网统一**——镜像、直连、代理按设备事实配置（Jetson 的 hf-mirror 是既成事实）。
+1. **不假设厂商 NPU 有可用推理引擎**——昇腾/CANN、摩尔线程、海光各自生态以 L1 探测 + L3 实测为准；bi150 的 corex 能否跑 llama.cpp 头号 **[待测] 已于 2026-10-14 改判：被否（CUDA）/ 事实（CPU）**——CoreX 4.4.0（CUDA 10.2 代、无真 nvcc、Iluvatar clang-18 `__CUDA_ARCH__=300`）无法编译 llama.cpp master 8c2134a8 的 GGML_CUDA 后端（结构性缺口），同 commit CPU 构建可用并已出实测成绩；复用配方与报错原文留档于 strata-jetson `results/2026-10-14-probe-bench/README.md` §2。
+2. **不假设出网统一**——镜像、直连、代理按设备事实配置（Jetson 的 hf-mirror 是既成事实；2026-10-14 双机探针证实出网形态同构 **[事实]**：pypi/hf-mirror/ssh.github.com:443 通、hf/github 直连断，bi150 实测经 hf-mirror 拉到与 jetson 在盘逐字节一致的官方工件）。
 3. **不假设性能可移植**——同模型换架构就是换了一个性能体，一切以 PerfRecord 为准。
 4. **不假设安装环境干净**——venv/容器隔离 + sha256 + 回滚是默认路径，不是可选项。
 5. **不假设设备长期在线**——一切状态可由探针重建，主控不保存不可复现的状态。

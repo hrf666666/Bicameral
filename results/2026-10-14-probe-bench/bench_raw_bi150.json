@@ -1,0 +1,157 @@
+{
+ "schema": "bench8-raw/1",
+ "meta": {
+  "tag": "bi150",
+  "base_url": "http://127.0.0.1:29600",
+  "prompts_file": "prompts-8.json",
+  "prompts": [
+   "The capital of France is",
+   "Write a haiku about rain.",
+   "Explain what a hash table is in one sentence.",
+   "1, 2, 3, 4,",
+   "Translate 'good morning' into French.",
+   "用一句话介绍冒泡排序。",
+   "List three primary colors.",
+   "Summarize the plot of Romeo and Juliet in two sentences."
+  ],
+  "endpoint": "POST /completion (native, stream=true)",
+  "n_predict": 128,
+  "temperature": 0.0,
+  "cache_prompt": false,
+  "repeats": 1,
+  "date_utc": "2026-10-14T10:45:56Z",
+  "warmup": {
+   "prompt_head": "The capital of France is",
+   "n_predict": 16,
+   "ttft_ms": 45.74
+  }
+ },
+ "summary": {
+  "n_runs": 8,
+  "n_ok": 8,
+  "ttft_ms": {
+   "mean": 23.57,
+   "median": 24.31,
+   "min": 16.05,
+   "max": 26.86
+  },
+  "prefill_tps": {
+   "mean": 538.68,
+   "median": 514.22,
+   "min": 373.52,
+   "max": 730.05
+  },
+  "decode_tps": {
+   "mean": 100.55,
+   "median": 100.78,
+   "min": 99.31,
+   "max": 101.05
+  }
+ },
+ "runs": [
+  {
+   "idx": 0,
+   "repeat": 0,
+   "prompt": "The capital of France is",
+   "ttft_ms": 16.05,
+   "prompt_n": 5,
+   "prompt_ms": 13.386,
+   "prefill_tps": 373.524577917227,
+   "predicted_n": 128,
+   "predicted_ms": 1278.862,
+   "decode_tps": 99.30704016539705,
+   "client_decode_tps": 100.06
+  },
+  {
+   "idx": 1,
+   "repeat": 0,
+   "prompt": "Write a haiku about rain.",
+   "ttft_ms": 23.48,
+   "prompt_n": 7,
+   "prompt_ms": 14.465,
+   "prefill_tps": 483.9267196681646,
+   "predicted_n": 128,
+   "predicted_ms": 1257.834,
+   "decode_tps": 100.96721824978495,
+   "client_decode_tps": 101.75
+  },
+  {
+   "idx": 2,
+   "repeat": 0,
+   "prompt": "Explain what a hash table is in one sentence.",
+   "ttft_ms": 25.58,
+   "prompt_n": 11,
+   "prompt_ms": 16.378,
+   "prefill_tps": 671.6326779826596,
+   "predicted_n": 128,
+   "predicted_ms": 1264.69,
+   "decode_tps": 100.41986573784881,
+   "client_decode_tps": 101.2
+  },
+  {
+   "idx": 3,
+   "repeat": 0,
+   "prompt": "1, 2, 3, 4,",
+   "ttft_ms": 26.54,
+   "prompt_n": 11,
+   "prompt_ms": 17.248,
+   "prefill_tps": 637.7551020408163,
+   "predicted_n": 128,
+   "predicted_ms": 1261.383,
+   "decode_tps": 100.68313906244178,
+   "client_decode_tps": 101.46
+  },
+  {
+   "idx": 4,
+   "repeat": 0,
+   "prompt": "Translate 'good morning' into French.",
+   "ttft_ms": 25.14,
+   "prompt_n": 8,
+   "prompt_ms": 15.753,
+   "prefill_tps": 507.8397765504983,
+   "predicted_n": 128,
+   "predicted_ms": 1258.958,
+   "decode_tps": 100.87707453306622,
+   "client_decode_tps": 101.66
+  },
+  {
+   "idx": 5,
+   "repeat": 0,
+   "prompt": "用一句话介绍冒泡排序。",
+   "ttft_ms": 22.75,
+   "prompt_n": 7,
+   "prompt_ms": 13.446,
+   "prefill_tps": 520.6009222073479,
+   "predicted_n": 128,
+   "predicted_ms": 1258.782,
+   "decode_tps": 100.89117893328631,
+   "client_decode_tps": 101.67
+  },
+  {
+   "idx": 6,
+   "repeat": 0,
+   "prompt": "List three primary colors.",
+   "ttft_ms": 22.17,
+   "prompt_n": 5,
+   "prompt_ms": 13.018,
+   "prefill_tps": 384.08357658626517,
+   "predicted_n": 128,
+   "predicted_ms": 1256.817,
+   "decode_tps": 101.04891961200397,
+   "client_decode_tps": 101.83
+  },
+  {
+   "idx": 7,
+   "repeat": 0,
+   "prompt": "Summarize the plot of Romeo and Juliet in two sentences.",
+   "ttft_ms": 26.86,
+   "prompt_n": 13,
+   "prompt_ms": 17.807,
+   "prefill_tps": 730.0499803448083,
+   "predicted_n": 128,
+   "predicted_ms": 1267.878,
+   "decode_tps": 100.16736626079167,
+   "client_decode_tps": 100.93
+  }
+ ]
+}
