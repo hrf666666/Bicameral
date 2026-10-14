@@ -28,7 +28,7 @@
 | 能力令牌 cap/3 | payload + HMAC-SHA256：agent / task / 工具白名单 / TTL / 预算 / 策略版本 / 工具指纹 |
 | 三维预算 | calls / llm_calls / bytes 原子扣减；429 携带 `dim=<耗尽维度>` |
 | 推理代理 | `llm.complete` 作为受控工具转发本地 OpenAI 兼容后端：探针 degrade/recover，预算独立计数 |
-| 令牌熔断 | 同一令牌 3 次策略拒绝（D5/D6/D7/D12）→ D16/TOKEN_BURNED |
+| 令牌熔断 | 同一令牌 3 次策略拒绝（调未注册工具、越权、逃逸、注入）后作废，后续调用一律 401 |
 
 
 ### 拒绝码链

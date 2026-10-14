@@ -28,7 +28,7 @@ The principle: **the constraint lives at the execution gate, not in the prompt.*
 | Capability token `cap/3` | payload + HMAC-SHA256: agent / task / tool allow-list / TTL / budget / policy version / tool fingerprints |
 | 3-dimension budget | calls / llm_calls / bytes debited atomically; 429 carries `dim=<exhausted dimension>` |
 | Inference proxy | `llm.complete` forwards to a local OpenAI-compatible backend as a governed tool: probe-driven degrade/recover, independent budget |
-| Token burning | 3 policy denials (D5/D6/D7/D12) on one token → D16/TOKEN_BURNED |
+| Token burning | after 3 policy denials on one token (unknown tool, escalation, escape, injection), the token is void — every further call is rejected |
 
 
 ### The deny-chain
