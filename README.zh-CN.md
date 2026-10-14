@@ -106,7 +106,8 @@ python3 scripts/live_check.py                        # 部署机上的 24 项回
 
 ## 7. 设计文档
 
-[docs/architecture.md](docs/architecture.md) — 完整设计：令牌格式、拒绝码链、预算防线、审计、同机推理整合、三轮红队实证、残余风险。
+[docs/architecture.md](docs/architecture.md) — 权限层完整设计：令牌格式、拒绝码链、预算防线、审计、三轮红队实证、残余风险。
+[docs/paradigm.md](docs/paradigm.md) — 上一层范式（设计稿）：设备感知、能力探测、性能实测、自动安装、跨异构设备的统一任务协议。
 
 ## License
 

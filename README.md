@@ -106,7 +106,8 @@ python3 scripts/live_check.py                        # 24-check regression on th
 
 ## 7. Design doc
 
-[docs/architecture.md](docs/architecture.md) — the full design: token format, deny-chain, budget defense, audit, co-located inference integration, three red-team rounds, residual risks.
+[docs/architecture.md](docs/architecture.md) — the permission layer: token format, deny-chain, budget defense, audit, three red-team rounds, residual risks.
+[docs/paradigm.md](docs/paradigm.md) — the next layer (design draft): device sensing, capability probing, on-device benchmarking, automated install, and the unified task protocol across heterogeneous devices.
 
 ## License
 
