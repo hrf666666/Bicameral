@@ -1,0 +1,25 @@
+{
+  "schema": "appspec/1",
+  "name": "qwen3-1.7b-q8_0",
+  "engine": {
+    "name": "llama.cpp",
+    "ref": "b11062",
+    "binary": "/home/nvidia/code/strata-jetson/work/llama-build/bin/llama-server",
+    "sha256": "8ea353d9d67439bea8ad6af8270c6fa2066f3adf3da7710bdfa190d072d684a8"
+  },
+  "model": {
+    "repo": "Qwen/Qwen3-1.7B-GGUF",
+    "file": "Qwen3-1.7B-Q8_0.gguf",
+    "format": "gguf",
+    "sha256": "f61b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+    "mirror_urls": [
+      "https://hf-mirror.com",
+      "https://huggingface.co"
+    ]
+  },
+  "service": {
+    "port": 18010,
+    "health": "/health",
+    "args": ["-m", "{model}", "--host", "127.0.0.1", "--port", "{port}", "-ngl", "99"]
+  }
+}
