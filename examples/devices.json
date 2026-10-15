@@ -1,0 +1,21 @@
+{
+  "schema": "devices/1",
+  "devices": [
+    {
+      "name": "jetson",
+      "local": true,
+      "ssh": null,
+      "run": "python3 /home/nvidia/code/Bicameral/bicameral/task.py execute-local",
+      "perf": "results/2026-10-14-probe-bench/perf-jetson.json",
+      "audit_ref": "/tmp/bicameral/audit.jsonl"
+    },
+    {
+      "name": "bi150",
+      "local": false,
+      "ssh": "-p 31451 root@10.70.251.39",
+      "run": "python3 /root/bicameral/task.py execute-local",
+      "perf": "results/2026-10-14-probe-bench/perf-bi150.json",
+      "audit_ref": "/tmp/bicameral/audit.jsonl"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "schema": "task/1",
+  "task_id": "qa-ability-token-001",
+  "type": "qa",
+  "input": {
+    "prompt": "用一句话说明什么是能力令牌"
+  },
+  "latency_class": "interactive",
+  "constraints": {
+    "egress": "none"
+  }
+}
