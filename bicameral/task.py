@@ -51,6 +51,7 @@ Python 3.10+, standard library only.
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import json
 import re
@@ -341,7 +342,7 @@ def get_model_id(control_url, timeout=5):
         return None
 
 
-def issue_token(control_url, task_id, timeout=10, ttl_s=DEFAULT_TTL_S):
+def issue_token(control_url, task_id, timeout=10, ttl_s=DEFAULT_TTL_S, admin_token=None):
     """POST /issue: least-privilege token — agent-ro, llm.complete, 1 call.
 
     Returns (token, jti, err); jti comes from the /issue response and feeds
@@ -352,7 +353,7 @@ def issue_token(control_url, task_id, timeout=10, ttl_s=DEFAULT_TTL_S):
         "tools": ["llm.complete"],
         "ttl_s": int(ttl_s),
         "budget": {"max_calls": 1, "max_llm_calls": 1},
-    }, timeout)
+    }, timeout, headers={"X-Admin-Token": admin_token} if admin_token else None)
     if status != 200 or not body.get("ok"):
         return None, None, "issue failed: HTTP %s %s" % (status, body.get("error"))
     jti = body.get("jti")
@@ -416,7 +417,7 @@ def cmd_execute_local(args) -> int:
         return 2
 
     token, jti, err = issue_token(args.control_url, task["task_id"],
-                                  timeout=args.http_timeout, ttl_s=args.ttl_s)
+                                  timeout=args.http_timeout, ttl_s=args.ttl_s, admin_token=args.admin_token or None)
     if err:
         print("task: %s" % err, file=sys.stderr)
         return 4
@@ -642,6 +643,8 @@ def main(argv=None) -> int:
                       help="device-side audit JSONL read back for the A9 "
                            "ALLOW-row digest (default: %s)" % DEFAULT_DEVICE_AUDIT)
     ap_x.add_argument("--max-tokens", type=int, default=LLM_MAX_TOKENS_CAP)
+    ap_x.add_argument("--admin-token", default=os.environ.get("BICAMERAL_ADMIN_TOKEN") or "",
+                    help="control-plane token if the local instance requires one")
     ap_x.add_argument("--ttl-s", type=int, default=DEFAULT_TTL_S)
     ap_x.add_argument("--http-timeout", type=float, default=10)
     ap_x.add_argument("--llm-timeout", type=float, default=120)

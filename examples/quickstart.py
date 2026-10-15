@@ -5,6 +5,7 @@ attacks, showing each one being rejected at the execution gate.
 Run:  python3 examples/quickstart.py        (no dependencies, ~5 seconds)
 """
 import base64
+import secrets
 import json
 import os
 import socket
@@ -42,11 +43,13 @@ def main():
     control, agentp = free_port(), free_port()
     data = tempfile.mkdtemp(prefix="bicameral-demo-")
     base, agent_url = "http://127.0.0.1:%d" % control, "http://127.0.0.1:%d" % agentp
+    admin = secrets.token_hex(16)
+    env = {**os.environ, "BICAMERAL_ADMIN_TOKEN": admin}
     proc = subprocess.Popen(
         [sys.executable, SERVER, "--control-port", str(control),
          "--agent-port", str(agentp), "--data-dir", data,
          "--strata-url", "http://127.0.0.1:1/v1"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     time.sleep(1.2)
 
     print("== Bicameral minimal verification ==")
@@ -63,7 +66,7 @@ def main():
         # 1. issue a read-only capability token
         s, r = post(base + "/issue",
                     {"agent": "agent-ro", "task_id": "demo", "tools": ["fs.read"],
-                     "ttl_s": 120, "budget": {"calls": 3}})
+                     "ttl_s": 120, "budget": {"calls": 3}}, {"X-Admin-Token": admin})
         tok = r["token"]
         step(1, "issue token", s == 200,
              "%d  jti=%s tools=%s budget=%s" % (s, r["jti"], r["tools"], r["budget"]))
@@ -77,7 +80,8 @@ def main():
 
         # 2. normal round-trip: write then read (write via its own writable token)
         s, r = post(base + "/issue",
-                    {"agent": "agent-rw", "task_id": "demo", "tools": ["fs.write"]})
+                    {"agent": "agent-rw", "task_id": "demo", "tools": ["fs.write"]},
+                    {"X-Admin-Token": admin})
         s, r = post(agent_url + "/agent/invoke",
                     {"nonce": "w0", "tool": "fs.write",
                      "params": {"path": os.path.join(data, "data", "notes.txt"),

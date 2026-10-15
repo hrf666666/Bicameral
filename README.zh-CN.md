@@ -74,11 +74,12 @@ python3 examples/quickstart.py
 ```
 
 ```bash
-# 启动（控制面 :18000，agent 面 :18001）；实验之外务必设置真实主控密钥
-python3 bicameral/server.py
+# 启动；控制面鉴权 fail-closed——设令牌（实验之外再加真实主控密钥）
+BICAMERAL_ADMIN_TOKEN=$(openssl rand -hex 16) python3 bicameral/server.py
 
-# 签发只读能力令牌
+# 签发只读能力令牌（控制面需要管理令牌）
 curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json' \
+  -H "X-Admin-Token: $BICAMERAL_ADMIN_TOKEN" \
   -d '{"agent":"agent-ro","task_id":"t1","tools":["fs.read"],"ttl_s":600,
        "budget":{"calls":10,"llm_calls":0,"bytes":65536}}'
 
@@ -98,18 +99,25 @@ curl -s -X POST http://127.0.0.1:18001/agent/invoke \
 ## 5. 部署与验证
 
 ```bash
-HOST=<host> PORT=22 USER=root ./scripts/deploy.sh   # 上传、重启、指纹核对
-python3 scripts/live_check.py                        # 部署机上的 24 项回归
+ADMIN_TOKEN=<token> HOST=<host> PORT=22 USER=root ./scripts/deploy.sh  # 上传、重启、指纹核对
+python3 scripts/live_check.py --admin-token <token> --expect-sha $(sha256sum bicameral/server.py | cut -c1-16)           # 部署机 24 项回归
 ```
 
 `/healthz` 暴露 `build_sha`（运行源码指纹）。远端指纹与本地 `sha256sum` 逐位一致才算部署成功——该机制已经抓到过一次静默版本漂移。
 
-## 6. 边界（不解决的问题）
+## 6. 边界——状态
 
-- schema 合法 ≠ 语义正确：LLM 输出内容的事实性不在权限层收口。
-- 本版管理面（`/issue`、`/audit`）无鉴权，生产需置于可信网段或加 mTLS（见设计文档 §7）。
-- 预算与 nonce 账本在内存：重启即清（fail-closed 方向），尚无持久化。
-- 吞吐未测：以上均为功能与边界验证。
+已解决（2026-10-16）：
+
+- **控制面鉴权**：`/issue`、`/audit`、`/capabilities` 需要管理令牌（`X-Admin-Token` 头或 `Authorization: Bearer`）；`/healthz` 保持开放供探活。启动 fail-closed——没有令牌直接退出，`--allow-open-control` 是显式的开发豁免。
+- **账本持久化**：预算、per-jti nonce 集、熔断计数与过期表原子快照到 `state.json`（节流写入，启动恢复）。重启不再清空重放守卫与预算——fail-open 窗口关闭。
+- **吞吐**：已实测——见 `results/2026-10-16-bench-throughput/`。
+
+仍是边界：
+
+- schema 合法 ≠ 语义正确：LLM 输出内容的事实性不在权限层收口。受治理的 `judge` subject 与 task/1 的 `quality_bar` 是 v2 评审模型的接入钩子。
+- 正则注入扫描天然是尽力而为；NUL 载荷已在 schema 拒绝，真正的门仍是拒绝码链。
+- mTLS / 每客户端证书仍是后续工作；管理令牌是 v1 的控制面凭证。
 
 ## 7. 设计文档
 

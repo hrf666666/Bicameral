@@ -49,14 +49,18 @@ def main():
     ap.add_argument("--agent", default="http://127.0.0.1:18001")
     ap.add_argument("--scope", default="/tmp/bicameral/data")
     ap.add_argument("--expect-sha", default=None, help="expected build_sha (16 hex)")
+    ap.add_argument("--admin-token", default=os.environ.get("BICAMERAL_ADMIN_TOKEN") or "",
+                    help="control-plane token (required by token-secured instances)")
     args = ap.parse_args()
     base, agent_url = args.base.rstrip("/"), args.agent.rstrip("/")
+
+    hdr = {"X-Admin-Token": args.admin_token} if args.admin_token else None
 
     def issue(agent, task, tools, ttl=600, budget=None):
         body = {"agent": agent, "task_id": task, "tools": tools, "ttl_s": ttl}
         if budget is not None:
             body["budget"] = budget
-        return post(base + "/issue", body)
+        return post(base + "/issue", body, hdr)
 
     def invoke(tok, nonce, tool, params, timeout=10):
         return post(agent_url + "/agent/invoke",
@@ -117,8 +121,11 @@ def main():
     s, r = issue("agent-ro", "t-c2", ["fs.read"], budget={"weird": 5})
     check("未知预算键400", s == 400, r)
     s, r = post(base + "/issue", {"agent": "agent-ro", "task_id": "t-c2b",
-                                  "tools": ["fs.read"], "foo": 1})
+                                  "tools": ["fs.read"], "foo": 1}, hdr)
     check("未知信封字段400", s == 400, r)
+    s, r = post(base + "/issue", {"agent": "agent-ro", "task_id": "t-auth",
+                                  "tools": ["fs.read"]})
+    check("无token控制面401", s == 401 and r.get("reason_code") == "CTL/AUTH_REQUIRED", r)
 
     # D. smuggle strip on fs.read (poison placed out-of-band)
     os.makedirs(args.scope, exist_ok=True)

@@ -74,11 +74,13 @@ python3 examples/quickstart.py
 ```
 
 ```bash
-# run the layer (control :18000, agent :18001); set a real master key outside experiments
-python3 bicameral/server.py
+# run the layer; control-plane auth is fail-closed — set a token (and a real
+# master key) outside experiments; --allow-open-control is the dev opt-out
+BICAMERAL_ADMIN_TOKEN=$(openssl rand -hex 16) python3 bicameral/server.py
 
-# issue a read-only capability token
+# issue a read-only capability token (control plane requires the admin token)
 curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json' \
+  -H "X-Admin-Token: $BICAMERAL_ADMIN_TOKEN" \
   -d '{"agent":"agent-ro","task_id":"t1","tools":["fs.read"],"ttl_s":600,
        "budget":{"calls":10,"llm_calls":0,"bytes":65536}}'
 
@@ -98,18 +100,25 @@ curl -s -X POST http://127.0.0.1:18001/agent/invoke \
 ## 5. Deploy & verify
 
 ```bash
-HOST=<host> PORT=22 USER=root ./scripts/deploy.sh   # upload, restart, fingerprint check
-python3 scripts/live_check.py --expect-sha $(sha256sum bicameral/server.py | cut -c1-16)  # 24-check regression
+ADMIN_TOKEN=<token> HOST=<host> PORT=22 USER=root ./scripts/deploy.sh  # upload, restart, fingerprint check
+python3 scripts/live_check.py --admin-token <token> --expect-sha $(sha256sum bicameral/server.py | cut -c1-16)  # 24-check regression
 ```
 
 `/healthz` exposes `build_sha` (the running source's fingerprint). A deployment counts as good only when the remote `build_sha` equals the local `sha256sum` — this has already caught one silent version drift.
 
-## 6. Boundaries (not solved here)
+## 6. Boundaries — status
 
-- Schema-valid ≠ semantically correct: the factual accuracy of LLM output is out of scope for the permission layer.
-- The control plane (`/issue`, `/audit`) is unauthenticated by design in this release; production needs a trusted network segment or mTLS (see design doc §7).
-- Budget and nonce ledgers are in-memory: restart clears them (fail-closed direction), no persistence yet.
-- Throughput is unmeasured; all results above are functional and boundary verification.
+Resolved (2026-10-16):
+
+- **Control-plane authentication**: `/issue`, `/audit`, `/capabilities` require the admin token (`X-Admin-Token` header or `Authorization: Bearer`); `/healthz` stays open for liveness. Startup is fail-closed — without a token the server exits unless `--allow-open-control` is passed (explicit dev opt-out).
+- **Ledger persistence**: budgets, per-jti nonce sets, burn counters and the expiry table snapshot atomically to `state.json` (throttled, restored at startup). A restart no longer clears the replay guard or budgets — the fail-open window is closed.
+- **Throughput**: measured — see `results/2026-10-16-bench-throughput/`.
+
+Still boundaries:
+
+- Schema-valid ≠ semantically correct: the factual accuracy of LLM output remains out of scope for the permission layer. The governed `judge` subject and `quality_bar` in task/1 are the hooks for a v2 judge model.
+- The regex injection scan is best-effort by design; NUL payloads are now rejected at schema, and the deny-chain remains the real gate.
+- mTLS / per-client certificates are still future work; the admin token is the v1 control-plane credential.
 
 ## 7. Design doc
 

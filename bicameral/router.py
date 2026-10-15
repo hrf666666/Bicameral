@@ -200,6 +200,9 @@ def validate_devices(raw):
         for name in ("name", "transport", "base", "agent", "exec"):
             if name not in d:
                 return None, "device missing field: " + name
+        if "admin_token" in d and (not isinstance(d["admin_token"], str)
+                                   or not 1 <= len(d["admin_token"]) <= 256):
+            return None, "device admin_token must be a 1..256 char string"
         name = d["name"]
         if not isinstance(name, str) or not TASK_ID_RE.match(name):
             return None, "device name must match %s" % TASK_ID_RE_STR
@@ -745,6 +748,8 @@ def execute_argv(cand, backend=None):
         argv += ["--control-url", cand["control"]]
     if cand.get("agent"):
         argv += ["--agent-url", cand["agent"]]
+    # admin_token never goes into argv (ps-visible): local transport receives it
+    # via the process environment; ssh devices must have it provisioned remotely.
     if backend:
         argv += ["--backend", backend]
     return argv
@@ -779,9 +784,12 @@ def _run_on_device(cand, task, args):
     backend = (cand.get("perf") or {}).get("backend")
     cmd = transport_cmd(cand, execute_argv(cand, backend))
     try:
+        env = dict(os.environ)
+        if cand.get("admin_token"):
+            env["BICAMERAL_ADMIN_TOKEN"] = cand["admin_token"]  # local transport only
         proc = subprocess.run(
             cmd, input=json.dumps(task, ensure_ascii=False).encode("utf-8"),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
             timeout=args.timeout)
     except subprocess.TimeoutExpired:
         return None, "device run timed out after %ss" % args.timeout

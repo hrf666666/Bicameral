@@ -10,11 +10,14 @@ REMOTE_DIR="${REMOTE_DIR:-/root/bicameral}"
 CONTROL="${CONTROL:-18000}"
 AGENTP="${AGENTP:-18001}"
 
+ADMIN_TOKEN="${ADMIN_TOKEN:?set ADMIN_TOKEN (control-plane token, >=16 chars)}"
 LOCAL_SHA=$(sha256sum bicameral/server.py | cut -c1-16)
 ssh -o BatchMode=yes -p "$PORT" "$USER@$HOST" "mkdir -p $REMOTE_DIR"
 scp -o BatchMode=yes -P "$PORT" bicameral/server.py "$USER@$HOST:$REMOTE_DIR/server.py"
 # remote script via stdin (quoted heredoc: nothing expands locally; the remote
 # shell's argv is just "bash -s", so the pkill pattern can never match it)
+printf '%s' "$ADMIN_TOKEN" | ssh -o BatchMode=yes -p "$PORT" "$USER@$HOST" \
+  "umask 077; mkdir -p $REMOTE_DIR; cat > $REMOTE_DIR/.admin_token"
 ssh -o BatchMode=yes -p "$PORT" "$USER@$HOST" \
   LOCAL_SHA="$LOCAL_SHA" REMOTE_DIR="$REMOTE_DIR" CONTROL="$CONTROL" AGENTP="$AGENTP" 'bash -s' <<'REMOTE'
 set -euo pipefail
@@ -24,7 +27,8 @@ REMOTE_SHA=$(sha256sum "$REMOTE_DIR/server.py" | cut -c1-16)
 pkill -f "python3 ($REMOTE_DIR/)?server\.py" 2>/dev/null || true
 sleep 1
 cd "$REMOTE_DIR"
-setsid nohup python3 server.py --control-port "$CONTROL" --agent-port "$AGENTP" \
+BICAMERAL_ADMIN_TOKEN=$(cat "$REMOTE_DIR/.admin_token") setsid nohup python3 server.py \
+  --control-port "$CONTROL" --agent-port "$AGENTP" \
   >"$REMOTE_DIR/poc.log" 2>&1 </dev/null &
 sleep 2
 HEALTH=$(curl -s -m 5 "http://127.0.0.1:$CONTROL/healthz")

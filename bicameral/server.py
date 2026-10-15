@@ -72,6 +72,7 @@ DATA_DIR = "/tmp/bicameral"                    # re-targeted by --data-dir in ma
 DATA_SCOPE = DATA_DIR + "/data"
 AUDIT_PATH = DATA_DIR + "/audit.jsonl"
 IDEM_DIR = DATA_DIR + "/idem"
+STATE_PATH = DATA_DIR + "/state.json"          # ledger snapshot; re-targeted in main()
 
 AUDIT_RING_MAX = 512                           # in-memory audit ring
 NONCE_PER_JTI = 256                            # bounded replay-nonce set per token
@@ -79,6 +80,7 @@ NONCE_JTI_MAX = 1024                           # bounded number of tokens tracke
 BURN_THRESHOLD = 3                             # policy denials before token burn
 BUDGET_MAX_TOKENS = 4096                       # bounded budget ledger (expired evicted first)
 DENY_MAX = 8192                                # bounded burn-counter table
+SAVE_PERIOD_S = 5.0                            # ledger snapshot interval (persistence)
 TTL_MAX = 3600                                 # /issue ttl_s clamp
 LLM_TIMEOUT = 60                               # strata chat/completions timeout (s);
                                                # measured round-trip on bi150 was 26.8s for a
@@ -147,6 +149,9 @@ BURNS = set()                                  # jtis burned after repeated poli
 DENY_COUNTS = {}                               # jti -> policy-denial count (burn counter)
 JTI_EXP = {}                                   # jti -> exp (drives expired-first eviction/sweep)
 
+SAVE_DIRTY = False                             # set by ledger mutators; snapshot thread consumes
+ADMIN_TOKEN = None                             # control-plane token; set in main()
+
 
 # --------------------------------------------------------------------------- #
 # small helpers
@@ -210,6 +215,97 @@ def audit(event, **fields):
                 pass
 
 
+def mark_dirty():
+    global SAVE_DIRTY
+    SAVE_DIRTY = True
+
+
+def _snapshot():
+    """Collect all ledger state (short lock takes, no I/O under locks)."""
+    with BUDGET_LOCK:
+        budgets = {j: dict(b) for j, b in BUDGETS.items()}
+        jti_exp = dict(JTI_EXP)
+        deny_counts = dict(DENY_COUNTS)
+        burns = sorted(BURNS)
+    with NONCE_LOCK:
+        nonces = {j: list(per.keys())[-NONCE_PER_JTI:] for j, per in NONCES.items()}
+    return {"schema": "state/1", "saved_at": round(time.time(), 3),
+            "jti_exp": jti_exp, "budgets": budgets, "deny_counts": deny_counts,
+            "burns": burns, "nonces": nonces}
+
+
+def save_state(force=False):
+    """Throttled atomic ledger snapshot.
+
+    Persistence closes the restart fail-open window: nonces (replay guard)
+    and budgets survive a restart instead of silently clearing.
+    """
+    global SAVE_DIRTY
+    if not (force or SAVE_DIRTY):
+        return
+    SAVE_DIRTY = False        # cleared BEFORE snapshot: changes racing this save
+    snap = _snapshot()        # re-dirty themselves and land in the next tick
+    tmp = "%s.tmp.%d" % (STATE_PATH, os.getpid())
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(snap, f, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, STATE_PATH)
+        os.chmod(STATE_PATH, 0o600)
+    except OSError as e:
+        sys.stderr.write("state snapshot failed: %s\n" % e)
+
+
+def load_state():
+    """Restore ledgers from the last snapshot (once, at startup)."""
+    if not os.path.isfile(STATE_PATH):
+        return None
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            snap = json.load(f)
+        if snap.get("schema") != "state/1":
+            raise ValueError("unknown state schema")
+        now = time.time()
+        with BUDGET_LOCK:
+            for j, e in snap.get("jti_exp", {}).items():
+                if isinstance(e, (int, float)) and e >= now:
+                    JTI_EXP[j] = e
+            for j, b in snap.get("budgets", {}).items():
+                if j in JTI_EXP and isinstance(b, dict):
+                    BUDGETS[j] = {k: int(v) for k, v in b.items() if k in BUDGET_CAPS}
+            for j, n in snap.get("deny_counts", {}).items():
+                if j in JTI_EXP and isinstance(n, int):
+                    DENY_COUNTS[j] = n
+            for j in snap.get("burns", []):
+                if j in JTI_EXP:
+                    BURNS.add(j)
+        with NONCE_LOCK:
+            for j, keys in snap.get("nonces", {}).items():
+                if j in JTI_EXP:
+                    NONCES[j] = collections.OrderedDict(
+                        (str(k), True) for k in keys[-NONCE_PER_JTI:])
+            while len(NONCES) > NONCE_JTI_MAX:
+                NONCES.popitem(last=False)
+        global SAVE_DIRTY
+        SAVE_DIRTY = False
+        return {"budgets": len(BUDGETS), "nonce_jtis": len(NONCES), "burns": len(BURNS)}
+    except Exception as e:                                 # noqa: BLE001 — a bad snapshot
+        sys.stderr.write("state restore skipped: %s\n" % e)  # must never block startup
+        try:
+            audit("RESTORE_FAILED", err=type(e).__name__)
+        except Exception:
+            pass
+        return None
+
+
+def state_saver_loop():
+    while True:
+        time.sleep(SAVE_PERIOD_S)
+        save_state()
+
+
 def nonce_seen(jti, nonce):
     """Per-jti bounded check-and-insert; atomic under lock (deny-side replay guard).
 
@@ -238,6 +334,7 @@ def nonce_seen(jti, nonce):
         per[key] = True
         while len(per) > NONCE_PER_JTI:
             per.popitem(last=False)
+        mark_dirty()
         return False
 
 
@@ -262,6 +359,7 @@ def budget_take(jti, tool, n_bytes):
         if is_llm:
             b["llm_calls"] -= 1
         b["bytes"] -= n_bytes
+        mark_dirty()
         return True, None
 
 
@@ -367,6 +465,9 @@ def bad_schema(tool, params):
     for name in params:
         if name not in spec:
             return "unknown field: " + name
+    for v in params.values():                  # NUL evades regex-based injection scan
+        if isinstance(v, str) and "\x00" in v:
+            return "control character NUL not allowed"
     if _has_forbidden_key(params):
         return "forbidden key (actions/tool_calls) at some depth"
     if tool == "llm.complete":
@@ -722,12 +823,14 @@ def enforce(tok_str, plane, req):
             with BUDGET_LOCK:                  # atomic check-and-increment (race fix)
                 n = DENY_COUNTS.get(t["jti"], 0) + 1
                 DENY_COUNTS[t["jti"]] = n
+                mark_dirty()
                 burn = n >= BURN_THRESHOLD and t["jti"] not in BURNS
                 if burn:
                     BURNS.add(t["jti"])
                     BUDGETS.pop(t["jti"], None)
             if burn:
                 audit("BURN", jti=t["jti"], denials=n, last=code)
+                mark_dirty()
         return status, body
 
     t = verify(tok_str or "")                                               # D1
@@ -849,12 +952,33 @@ class Handler(BaseHTTPRequestHandler):
             raise BodyError(400, "truncated body")
         return data
 
+    def _control_auth(self):
+        """Control plane (except /healthz) requires the admin token when one
+        is configured. Startup is fail-closed without a token unless the dev
+        opt-out is given, so an open control plane is always a stated choice."""
+        if ADMIN_TOKEN is None:
+            return True
+        tok = self.headers.get("X-Admin-Token") or ""
+        auth = self.headers.get("Authorization") or ""
+        if auth.startswith("Bearer "):
+            tok = tok or auth[7:].strip()
+        if not tok:
+            return False
+        return hmac.compare_digest(tok.encode("utf-8"), ADMIN_TOKEN.encode("utf-8"))
+
+    def _reject_control(self):
+        audit("DENY", reason_code="CTL/AUTH_REQUIRED",
+              plane=getattr(self.server, "plane", "?"), path=self.path[:128])
+        self._send(401, {"ok": False, "reason_code": "CTL/AUTH_REQUIRED"})
+
     # ---------------- POST ---------------- #
 
     def do_POST(self):
         try:
             path = urllib.parse.urlparse(self.path).path
             if self.server.plane == "control" and path == "/issue":
+                if not self._control_auth():
+                    return self._reject_control()
                 self.h_issue()
             elif self.server.plane == "agent" and path == "/agent/invoke":
                 self.h_invoke()
@@ -920,6 +1044,7 @@ class Handler(BaseHTTPRequestHandler):
                 BUDGETS.popitem(last=False)    # oldest ledger goes (fail-closed: loss = deny)
             while len(DENY_COUNTS) > DENY_MAX:
                 DENY_COUNTS.popitem(last=False)
+        mark_dirty()
         audit("ISSUE", jti=payload["jti"], agent=agent, task_id=task_id,
               tools=payload["tools"], ttl_s=ttl_s, budget=budget)
         self._send(200, {"ok": True, "token": tok, "jti": payload["jti"],
@@ -969,6 +1094,8 @@ class Handler(BaseHTTPRequestHandler):
                                         "build_sha": BUILD_SHA,
                                         "strata_state": STATE["strata"],
                                         "pol_ver": STATE["pol_ver"]})
+            if not self._control_auth():
+                return self._reject_control()
             if u.path == "/capabilities":
                 return self._send(200, {
                     "pol_ver": STATE["pol_ver"],
@@ -1019,18 +1146,31 @@ class AgentServer(Server):
 
 def main():
     global KEY, STRATA_URL, AUDIT_FILE, DATA_DIR, DATA_SCOPE, AUDIT_PATH, IDEM_DIR
+    global STATE_PATH, ADMIN_TOKEN
     ap = argparse.ArgumentParser(description="bicameral (master-edge permission layer, cap/3)")
     ap.add_argument("--control-port", type=int, default=18000)
     ap.add_argument("--agent-port", type=int, default=18001)
     ap.add_argument("--strata-url", default="http://127.0.0.1:8960/v1")
     ap.add_argument("--data-dir", default="/tmp/bicameral")
+    ap.add_argument("--admin-token", default=os.environ.get("BICAMERAL_ADMIN_TOKEN") or "",
+                    help="control-plane token (X-Admin-Token / Bearer); env BICAMERAL_ADMIN_TOKEN")
+    ap.add_argument("--allow-open-control", action="store_true",
+                    help="dev only: run the control plane without an admin token")
     args = ap.parse_args()
 
     DATA_DIR = args.data_dir.rstrip("/")
     DATA_SCOPE = DATA_DIR + "/data"
     AUDIT_PATH = DATA_DIR + "/audit.jsonl"
     IDEM_DIR = DATA_DIR + "/idem"
+    STATE_PATH = DATA_DIR + "/state.json"
     STRATA_URL = args.strata_url.rstrip("/")
+
+    ADMIN_TOKEN = args.admin_token.strip() or None   # "" (open mode) normalises to None
+    if ADMIN_TOKEN and len(ADMIN_TOKEN) < 16:
+        sys.exit("admin token must be at least 16 characters")
+    if not ADMIN_TOKEN and not args.allow_open_control:
+        sys.exit("control plane auth required: set BICAMERAL_ADMIN_TOKEN "
+                 "(or --allow-open-control for local experiments)")
 
     key_hex = os.environ.get("POC_MASTER_KEY") or DEV_MASTER_KEY_HEX
     try:
@@ -1043,9 +1183,14 @@ def main():
     os.makedirs(DATA_SCOPE, exist_ok=True)
     os.makedirs(IDEM_DIR, exist_ok=True)
     AUDIT_FILE = open(AUDIT_PATH, "a", encoding="utf-8")
+    restored = load_state()
+    if restored:
+        audit("RESTORE", **restored)
     audit("START", pol_ver=POL_VER, build_sha=BUILD_SHA, control_port=args.control_port,
           agent_port=args.agent_port, strata=STRATA_URL,
+          control_auth="token" if ADMIN_TOKEN else "open",
           master_key_source="env" if os.environ.get("POC_MASTER_KEY") else "dev-default")
+    threading.Thread(target=state_saver_loop, daemon=True).start()
 
     # startup probe: Strata unreachable -> llm.complete marked degraded, service still starts
     ok, mid = probe_strata()
@@ -1075,6 +1220,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        save_state(force=True)
         httpd_c.shutdown()
         httpd_a.shutdown()
 
