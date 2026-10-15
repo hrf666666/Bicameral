@@ -25,7 +25,10 @@ Subcommands:
 Flow of apply (each step audited; ANY failure → rollback; the whole flow
 runs under an exclusive <sandbox>/apps/<name>.lock — a second concurrent
 apply of the same app exits 6 instead of racing the first):
-    read appspec → validate schema → probe current install_state (sandbox
+    read appspec → validate schema (fail-closed engine whitelist, A5:
+    engine.name must be listed in APPSPEC_ENGINE_BINARIES and engine.binary
+    must have a whitelisted basename — interpreters never pass) → probe
+    current install_state (sandbox
     marker + filesystem/service facts) → resolve engine (dual sha256, §5) →
     download model (mirror_urls tried in order, bounded retries/timeouts; a
     hash mismatch on one mirror only fails that attempt) → verify sha256
@@ -99,14 +102,22 @@ MARKER_NAME = ".bicameral-install-state.json"
 DEFAULT_SANDBOX = "/root/bicameral-sandbox"
 AUDIT_NAME = "audit.jsonl"
 
-# engine.name → binary name the capability layer actually looks for.
-# Mirror of probe.APPSPEC_ENGINE_BINARIES (probe.py is NOT imported: both
-# files stay independently deployable single files).
+# engine.name → the engine binary the capability layer is allowed to run.
+# Shape mirror of probe.APPSPEC_ENGINE_BINARIES (probe.py is NOT imported:
+# both files stay independently deployable single files); this copy is the
+# schema-level AUTHORITY since the 2026-10-15 red-team round (A5): every
+# appspec's engine.name must hit this whitelist and a given engine.binary
+# is accepted only when its basename matches the engine's executables (the
+# path is free, the basename decides). An interpreter or any other binary
+# (sh/bash/dash/zsh/python*/perl/ruby, look-alikes) can never match the
+# executables tuple, so it is a schema error (exit 2, INSTALL_FAIL
+# step=schema) before anything is downloaded or spawned — the argv this
+# tool later starts is pinned to real engine executables no matter what an
+# appspec claims. Extend only by adding a deliberately reviewed entry;
+# anything unseen fails closed.
 APPSPEC_ENGINE_BINARIES = {
-    "llama.cpp": "llama-server",
-    "llama-server": "llama-server",
-    "vllm": "vllm",
-    "strata": "strata",
+    "llama.cpp": {"binary": "llama-server",
+                  "executables": ("llama-server", "llama-server.exe")},
 }
 
 LIMITS = {
@@ -339,6 +350,19 @@ def validate_appspec(obj):
                 return None, err
     if "binary" in eng and not os.path.isabs(eng["binary"]):
         return None, "engine.binary must be an absolute device path when given"
+    white = APPSPEC_ENGINE_BINARIES.get(eng["name"])
+    if white is None:
+        return None, ("engine.name must be one of %s (engine whitelist, A5: "
+                      "unlisted engines are never installed or started)"
+                      % ", ".join(sorted(APPSPEC_ENGINE_BINARIES)))
+    if "binary" in eng:
+        exe = os.path.basename(eng["binary"])
+        if exe not in white["executables"]:
+            return None, ("engine.binary basename %r is not a whitelisted "
+                          "executable for engine.name %r (one of: %s) — "
+                          "interpreters and other binaries are rejected "
+                          "(A5)" % (exe, eng["name"],
+                                    ", ".join(white["executables"])))
     if "sha256" in eng and not HEX64_RE.match(eng["sha256"]):
         return None, "engine.sha256 must be 64 hex chars"
 
@@ -679,12 +703,13 @@ def resolve_engine(spec: dict) -> tuple[dict | None, str | None]:
     A pinned-sha mismatch surfaces as a reason starting with VERIFY_FAIL.
     """
     eng = spec["engine"]
-    binary = eng.get("binary") or search_binary(
-        APPSPEC_ENGINE_BINARIES.get(eng["name"], eng["name"]))
+    white = APPSPEC_ENGINE_BINARIES.get(eng["name"])
+    search_name = white["binary"] if white else eng["name"]
+    binary = eng.get("binary") or search_binary(search_name)
     if not binary:
         return None, ("engine %r: binary %r not found (no engine.binary given, "
                       "and not on PATH/install roots)"
-                      % (eng["name"], APPSPEC_ENGINE_BINARIES.get(eng["name"], eng["name"])))
+                      % (eng["name"], search_name))
     if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
         return None, "engine binary not executable: %s" % binary
     try:
@@ -1428,6 +1453,34 @@ def cmd_selftest(_args) -> int:
     bad(lambda o: o["engine"].update(binary="relative/path"), "relative_binary")
     bad(lambda o: o["engine"].update(hack=1), "unknown_engine_field")
     bad(lambda o: o["engine"].pop("name"), "missing_engine_name")
+
+    # --- A5: engine whitelist — basename decides, interpreters die here --- #
+    good_bin = json.loads(json.dumps(good))
+    good_bin["engine"]["binary"] = "/opt/llama.cpp/bin/llama-server"
+    s5, e5 = validate_appspec(good_bin)
+    check("engine.accepts_whitelisted_path", s5 is not None and e5 is None,
+          e5 or "")
+    good_exe = json.loads(json.dumps(good))
+    good_exe["engine"]["binary"] = "/opt/w/llama-server.exe"   # windows form
+    check("engine.accepts_whitelisted_exe",
+          validate_appspec(good_exe)[0] is not None)
+    bad(lambda o: o["engine"].update(binary="/bin/sh"), "engine_interpreter_sh")
+    bad(lambda o: o["engine"].update(binary="/bin/bash"),
+        "engine_interpreter_bash")
+    bad(lambda o: o["engine"].update(binary="/usr/bin/python3.11"),
+        "engine_interpreter_python")
+    bad(lambda o: o["engine"].update(binary="/usr/bin/perl"),
+        "engine_interpreter_perl")
+    bad(lambda o: o["engine"].update(binary="/opt/evil/llama-server-evil"),
+        "engine_basename_mismatch")
+    bad(lambda o: o["engine"].update(name="vllm"),
+        "engine_name_not_whitelisted")
+    no_bin = json.loads(json.dumps(good))
+    del no_bin["engine"]["binary"]        # search path: whitelist still gates
+    del no_bin["engine"]["sha256"]
+    del no_bin["engine"]["ref"]
+    check("engine.no_binary_whitelisted_name_ok",
+          validate_appspec(no_bin)[0] is not None)
     bad(lambda o: o["model"].update(sha256="0" * 63), "short_model_sha")
     bad(lambda o: o["model"].pop("sha256"), "missing_model_sha")
     bad(lambda o: o["model"].update(format="onnx"), "bad_format")

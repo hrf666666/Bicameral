@@ -28,11 +28,20 @@ Result envelope (result/1) — identical shape no matter which device ran:
     {"schema":"result/1","task_id":...,"device":...,
      "engine":{"model_id":...,"backend":...},
      "perf_ref":...,"audit_ref":...,
+     "device_audit_digest":...,
      "result":{"content_summary":...,"usage":{...}},"latency_ms":...}
 per paradigm §3.5: 调用方拿到的不仅是答案，还有「这个答案是在什么能力的
 设备上、以什么实测性能产生的」。model_id comes from the local layer's
 GET /capabilities (the layer's live Strata state); backend and the refs are
 supplied by whoever ships the task (the router passes the PerfRecord facts).
+
+device_audit_digest (red-team A9 hardening): sha256_16 of THIS run's ALLOW
+row in the device-side audit (the row the local permission layer wrote when
+the jti from /issue was spent). A fabricated envelope cannot carry a digest
+that resolves to a real ALLOW row for its task_id — bicameral/
+verify_result.py cross-checks exactly that at archival time. null means the
+executor could not read its audit (envelope stays valid; the cross-check
+will reject it — fail-loud downstream, never silent).
 
 Exit codes: 0 ok · 2 usage/schema error · 3 permission-layer DENY (reason
 code on stderr) · 4 control-plane /issue failure · 5 envelope failure.
@@ -42,6 +51,7 @@ Python 3.10+, standard library only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import secrets
@@ -64,6 +74,9 @@ EGRESS_VALUES = ("none",)          # only "none" is named by §3.5 so far
 LLM_PROMPT_MAX = 8 * 1024
 LLM_MAX_TOKENS_CAP = 64
 DEFAULT_TTL_S = 300
+
+DEFAULT_DEVICE_AUDIT = "/tmp/bicameral/audit.jsonl"   # server.py AUDIT_PATH default
+SHA16_RE = re.compile(r"^[0-9a-f]{16}$")              # sha256_16 fingerprint
 
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 QUALITY_BAR_KEY_RE = re.compile(r"^min_[a-z0-9_]+$")
@@ -195,14 +208,15 @@ def load_task(path):
 # --------------------------------------------------------------------------- #
 
 def normalize_result(task_id, device, raw, engine, perf_ref, audit_ref,
-                     latency_ms):
+                     latency_ms, device_audit_digest=None):
     """Normalize any device's execution outcome into one result/1 envelope.
 
     raw is either the agent-plane response {"ok":true,"result":{...}} or the
     inner result {"content_summary":...,"usage":{...}} directly — the caller
     does not need to know which shape came back. engine is coerced to exactly
-    {model_id, backend}. Returns the envelope dict (key order is normative
-    for readability; consumers must not depend on it).
+    {model_id, backend}. device_audit_digest pins the run to its device-side
+    ALLOW audit row (A9; see module docstring). Returns the envelope dict
+    (key order is normative for readability; consumers must not depend on it).
     """
     if isinstance(raw, dict) and raw.get("ok") is True and isinstance(raw.get("result"), dict):
         raw = raw["result"]
@@ -219,20 +233,58 @@ def normalize_result(task_id, device, raw, engine, perf_ref, audit_ref,
                    "backend": eng.get("backend")},
         "perf_ref": perf_ref,
         "audit_ref": audit_ref,
+        "device_audit_digest": device_audit_digest,
         "result": {"content_summary": summary if isinstance(summary, str) else None,
                    "usage": usage if isinstance(usage, dict) else {}},
         "latency_ms": round(float(latency_ms), 1) if _is_num(latency_ms) else None,
     }
 
 
+def extract_allow_digest(audit_path, jti, task_id):
+    """A9: sha256_16 of THIS run's ALLOW row in the device-side audit.
+
+    Scans the audit for the last line whose event is ALLOW with this jti +
+    task_id and hashes that line's exact raw bytes. The digest ties the
+    envelope to a permission event a forger cannot produce for a run that
+    never happened (bicameral/verify_result.py resolves it at archival).
+    Returns (digest_or_None, detail) — None is honest "could not extract",
+    never a fabricated value.
+    """
+    if not isinstance(jti, str) or not jti:
+        return None, "no jti (issue response lacked one)"
+    try:
+        with open(audit_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError as e:
+        return None, "cannot read device audit %s: %s" % (audit_path, e.strerror)
+    for raw_line in reversed(lines):
+        line = raw_line.rstrip("\n")
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and obj.get("event") == "ALLOW" \
+                and obj.get("jti") == jti and obj.get("task_id") == task_id:
+            return hashlib.sha256(line.encode("utf-8")).hexdigest()[:16], "ok"
+    return None, "no ALLOW row for jti=%s task_id=%s in %s" % (
+        jti, task_id, audit_path)
+
+
 def validate_result(env):
-    """Strict result/1 shape check. Returns None if ok, else error string."""
+    """Strict result/1 shape check. Returns None if ok, else error string.
+
+    device_audit_digest must be present (A9): null is legal at shape level
+    (the executor could not read its audit — envelope survives, the archival
+    cross-check will not), anything set must be 16 lowercase hex chars.
+    """
     if not isinstance(env, dict):
         return "envelope must be a JSON object"
     if env.get("schema") != RESULT_SCHEMA:
         return "schema must be %r" % RESULT_SCHEMA
     want = {"schema", "task_id", "device", "engine", "perf_ref", "audit_ref",
-            "result", "latency_ms"}
+            "device_audit_digest", "result", "latency_ms"}
     missing = sorted(want - set(env))
     unknown = sorted(set(env) - want)
     if missing:
@@ -242,6 +294,9 @@ def validate_result(env):
     for name in ("task_id", "device", "perf_ref", "audit_ref"):
         if not isinstance(env.get(name), str) or not env[name]:
             return "%s must be a non-empty string" % name
+    dad = env.get("device_audit_digest")
+    if dad is not None and (not isinstance(dad, str) or not SHA16_RE.match(dad)):
+        return "device_audit_digest must be null or 16 lowercase hex chars"
     eng = env.get("engine")
     if not isinstance(eng, dict) or set(eng) != {"model_id", "backend"}:
         return "engine must be exactly {model_id, backend}"
@@ -287,7 +342,10 @@ def get_model_id(control_url, timeout=5):
 
 
 def issue_token(control_url, task_id, timeout=10, ttl_s=DEFAULT_TTL_S):
-    """POST /issue: least-privilege token — agent-ro, llm.complete, 1 call."""
+    """POST /issue: least-privilege token — agent-ro, llm.complete, 1 call.
+
+    Returns (token, jti, err); jti comes from the /issue response and feeds
+    extract_allow_digest after the invocation (A9)."""
     status, body = _post_json(control_url + "/issue", {
         "agent": SUBJECT,
         "task_id": task_id,
@@ -296,8 +354,9 @@ def issue_token(control_url, task_id, timeout=10, ttl_s=DEFAULT_TTL_S):
         "budget": {"max_calls": 1, "max_llm_calls": 1},
     }, timeout)
     if status != 200 or not body.get("ok"):
-        return None, "issue failed: HTTP %s %s" % (status, body.get("error"))
-    return body["token"], None
+        return None, None, "issue failed: HTTP %s %s" % (status, body.get("error"))
+    jti = body.get("jti")
+    return body["token"], (jti if isinstance(jti, str) else None), None
 
 
 def invoke(agent_url, token, prompt, max_tokens, timeout=120):
@@ -356,8 +415,8 @@ def cmd_execute_local(args) -> int:
               file=sys.stderr)
         return 2
 
-    token, err = issue_token(args.control_url, task["task_id"],
-                             timeout=args.http_timeout, ttl_s=args.ttl_s)
+    token, jti, err = issue_token(args.control_url, task["task_id"],
+                                  timeout=args.http_timeout, ttl_s=args.ttl_s)
     if err:
         print("task: %s" % err, file=sys.stderr)
         return 4
@@ -371,11 +430,22 @@ def cmd_execute_local(args) -> int:
         print("task: %s" % err, file=sys.stderr)
         return 3
 
+    # A9: pin this run to its device-side ALLOW audit row. A null digest is
+    # recorded honestly (stderr note) — the envelope stays valid, but the
+    # archival cross-check (bicameral/verify_result.py) will reject it.
+    digest, detail = extract_allow_digest(args.audit_path, jti,
+                                          task["task_id"])
+    if digest is None:
+        print("task: note: device_audit_digest unavailable: %s "
+              "(archival cross-check will reject this envelope)" % detail,
+              file=sys.stderr)
+
     env = normalize_result(
         task_id=task["task_id"], device=args.device, raw=raw,
         engine={"model_id": model_id, "backend": args.backend},
         perf_ref=args.perf_ref, audit_ref=args.audit_ref,
-        latency_ms=latency_ms if latency_ms is not None else 0.0)
+        latency_ms=latency_ms if latency_ms is not None else 0.0,
+        device_audit_digest=digest)
     err = validate_result(env)
     if err:
         print("task: envelope invalid: %s" % err, file=sys.stderr)
@@ -452,14 +522,16 @@ def cmd_selftest(_args) -> int:
         engine={"model_id": "Qwen3-0.6B-Q8_0",
                 "backend": "CUDA (libggml-cuda.so.0.24.0)"},
         perf_ref="results/2026-10-14-probe-bench/perf-jetson.json",
-        audit_ref="/tmp/bicameral/audit.jsonl", latency_ms=1883.27)
+        audit_ref="/tmp/bicameral/audit.jsonl", latency_ms=1883.27,
+        device_audit_digest="b7c9e2a41d3f5068")
     bi150 = normalize_result(
         task_id="qa-ability-token-001", device="bi150",
         raw={"content_summary": "能力令牌是…（bi150 的回答）",
              "usage": {"completion_tokens": 51}},
         engine={"model_id": "Qwen3-0.6B-Q8_0", "backend": "CPU only"},
         perf_ref="results/2026-10-14-probe-bench/perf-bi150.json",
-        audit_ref="/root/bicameral-sandbox/audit.jsonl", latency_ms=986.4)
+        audit_ref="/root/bicameral-sandbox/audit.jsonl", latency_ms=986.4,
+        device_audit_digest="0123456789abcdef")
 
     e1, e2 = validate_result(jetson), validate_result(bi150)
     check("normalize.dual_machine_valid", e1 is None and e2 is None,
@@ -477,6 +549,16 @@ def cmd_selftest(_args) -> int:
           and jetson["result"]["usage"] == {"completion_tokens": 42})
     check("normalize.latency_rounded",
           jetson["latency_ms"] == 1883.3 and bi150["latency_ms"] == 986.4)
+    check("normalize.digest_passthrough",
+          jetson["device_audit_digest"] == "b7c9e2a41d3f5068"
+          and bi150["device_audit_digest"] == "0123456789abcdef")
+    no_dig = normalize_result("t", "d", raw={"content_summary": "s", "usage": {}},
+                              engine={"model_id": "m", "backend": "b"},
+                              perf_ref="p", audit_ref="a", latency_ms=1.0)
+    check("normalize.digest_defaults_null",
+          no_dig["device_audit_digest"] is None
+          and validate_result(no_dig) is None)   # shape-valid; cross-check
+          # (verify_result.py) is what rejects null — fail-loud, not here
 
     bad_raw = normalize_result("t", "d", raw="not-a-dict",
                                engine="nope", perf_ref="p", audit_ref="a",
@@ -500,6 +582,15 @@ def cmd_selftest(_args) -> int:
         check("result.rejects_" + label, bool(e), e or "accepted")
 
     bad_env(lambda o: o.update(extra=1), "unknown_top_field")
+    bad_env(lambda o: o.pop("device_audit_digest"), "missing_digest_field")
+    bad_env(lambda o: o.update(device_audit_digest="ABCDEF0123456789"),
+            "digest_uppercase")
+    bad_env(lambda o: o.update(device_audit_digest="0123456789abcde"),
+            "digest_too_short")
+    bad_env(lambda o: o.update(device_audit_digest="f" * 64),
+            "digest_full_sha256_not_16")
+    bad_env(lambda o: o.update(device_audit_digest="g" * 16),
+            "digest_not_hex")
     bad_env(lambda o: o.pop("audit_ref"), "missing_audit_ref")
     bad_env(lambda o: o.update(schema="result/2"), "wrong_schema")
     bad_env(lambda o: o.update(device=""), "empty_device")
@@ -547,6 +638,9 @@ def main(argv=None) -> int:
                       help="PerfRecord reference recorded in the envelope")
     ap_x.add_argument("--audit-ref", default="unknown",
                       help="device-side audit trail reference")
+    ap_x.add_argument("--audit-path", default=DEFAULT_DEVICE_AUDIT,
+                      help="device-side audit JSONL read back for the A9 "
+                           "ALLOW-row digest (default: %s)" % DEFAULT_DEVICE_AUDIT)
     ap_x.add_argument("--max-tokens", type=int, default=LLM_MAX_TOKENS_CAP)
     ap_x.add_argument("--ttl-s", type=int, default=DEFAULT_TTL_S)
     ap_x.add_argument("--http-timeout", type=float, default=10)

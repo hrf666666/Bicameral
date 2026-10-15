@@ -119,12 +119,17 @@
 
 ## 5. 攻击面预判（红队先行，照旧范式）
 
-| 攻击 | 预防 |
-|---|---|
-| 伪造 DeviceReport / PerfRecord 骗路由（「我是 4090」） | 报告带设备指纹+探针指纹；bench 由主控下发的探针现场跑，不接受设备自报数值 |
-| install 供应链投毒（模型/引擎替换） | appspec 双 sha256 + 下载后校验 + 安装目录指纹入审计 |
-| probe/bench 滥用为内网扫描器 | 探测本身是受控工具，受白名单与预算约束 |
-| 路由退化攻击（压垮快设备使其降级，任务全部滑向弱设备） | PerfRecord 时效 + 负载采样 + 路由审计可复审 |
+> **实装状态标注（2026-10-15 阶段 5 红队轮后）**：前四行是设计稿原预判；后三行是红队轮实攻新发现折入。实装状态以红队复测为准，逐项证据见本仓 `results/2026-10-15-stage5-redteam/README.md`。
+
+| 攻击 | 预防 | 实装状态（2026-10-15） |
+|---|---|---|
+| 伪造 DeviceReport / PerfRecord 骗路由（「我是 4090」） | 报告带设备指纹+探针指纹；bench 由主控下发的探针现场跑，不接受设备自报数值 | **部分实装**：ROUTE 事件记录每个输入 perf 文件 `sha256_16` + CLI `--expect-perf-sha` pin（router.py:97-105, :177-216, :302-319），伪造文件指纹可见、pin 后 NOT_VIABLE（A1 复测 blocked）；**pin 为可选项**（不带 pin 仍被伪造数值导向，仅可见性）；「主控现场跑 bench」与 bench date 时效窗**未实装** |
+| install 供应链投毒（模型/引擎替换） | appspec 双 sha256 + 下载后校验 + 安装目录指纹入审计 | **实装**（阶段 3）：A3 镜像替换、A6 无 pin 安装首轮 blocked，A3 复测回归 blocked；A4 挂起被 60s 读超时有界化（stall guard 覆盖慢滴漏变体） |
+| probe/bench 滥用为内网扫描器 | 探测本身是受控工具，受白名单与预算约束 | **实装**：A7 三恶意 appspec（绝对 URL/异构 scheme/内网）全部被钉死 loopback、降级为本地 path，无 SSRF（blocked） |
+| 路由退化攻击（压垮快设备使其降级，任务全部滑向弱设备） | PerfRecord 时效 + 负载采样 + 路由审计可复审 | **部分实装**：决策前 `health_url` 存活探测（不可达/strata_state≠ok → NOT_VIABLE，router.py:252-300）+ 路由审计可复审（ROUTE 事件+指纹）；**负载采样未实装**（load 如实记 null）、**PerfRecord 时效未实装**；失败后不自动回退次优候选 |
+| **审计灭迹**（删行/伪造行，A2 红队发现） | 审计事件哈希链（seq+prev_sha256_16）+ 启动验链响亮告警 + tail_sha256_16 外部锚定 | **实装**（router.py:364-470, :562-580）：删中间行/原地改均 `AUDIT CHAIN BROKEN` 铁证告警（复测 blocked）；**残余**：删末行/末行原地改文件内不可见——外部锚定为运维动作，未自动化 |
+| **信封伪造**（result/1 无中生有，A9 红队发现） | 信封携带 `device_audit_digest`（设备侧 ALLOW 行原始字节哈希）+ 归档核验（verify_result.py：digest→唯一 ALLOW 行→task_id→ISSUE/ALLOW 配对） | **实装**（task.py:243-310, :410-448；verify_result.py 新增）：伪造信封被 router 拒（缺字段 exit 4）、伪造 digest 被归档核验拒（复测 blocked）；**残余**：digest 绑定授权事件而非信封内容，需设备侧签名才能彻底闭合 |
+| **engine.binary 解释器注入 / devices run 任意命令**（A5/A11 红队发现） | engine.binary 白名单化（拒解释器、args 模板枚举）；devices/1 清单指纹/签名 + run 白名单模板 | **已实装（2026-10-15 第二批修复）**：engine 白名单 `APPSPEC_ENGINE_BINARIES`（basename 必须 llama-server，解释器 schema 即拒 exit 2，A5 复测 proof 未生成）；devices 清单结构化白名单（自由 run 字段与未知字段拒绝、ssh 目的地结构化堵 -oProxyCommand、清单 sha256_16 入 ROUTE/RESULT，A11 复测 exit 3 零冒名行） |
 
 ---
 
@@ -136,7 +141,7 @@
 | 2 | bench/1 套件 | 同一模型档在两机产出可比 PerfRecord（四同原则）——**达成 2026-10-14**：Qwen3-0.6B Q8_0 双机 perf 记录（perf-jetson.json / perf-bi150.json，在 本仓 results/2026-10-14-probe-bench/），四同经程序化复验成立（8 条 prompt 逐字一致且逐条 prompt_n 相同、模型 sha256 全串相等、ctx 2048 双方服务端字段互证、并发 1 单 slot），对照表见同上 README §3；结果：bi150 CPU decode 100.55 tok/s ≈ 1.49× jetson CUDA 67.48；perf-jetson 内保留的 `comparable:false` 为流水线中途痕迹，最终以归档证据裁定可比 |
 | 3 | appspec/1 + install.apply PoC | 一条指令把一台 `absent` 设备变 `ready`，全程审计可查、失败可回滚——**达成 2026-10-14**：install.py（stdlib 单文件 1254 行，与 server.py 同哲学）在 bi150 沙箱把 qwen3-1.7b-q8_0 从 `absent` 变 `ready`（hf-mirror 流式下载 1,834,426,016 B、sha256 逐块校验 `061b54da…`、/health 200 + /v1/models 双证 + 真实推理 44.9 tok/s CPU）；失败可回滚经两条真机路径实证：badsha（仅 model.sha256 首字符 0→f）`VERIFY_FAIL` 绝不落位→回滚 absent 且目录全清，引擎 pin 不符同样 `VERIFY_FAIL`(exit 3)——校验强制生效；幂等 dedup（name+model.sha256）零下载零新进程复用在跑服务。判定与逐项证据（含两处如实记录：examples 携带他机引擎指纹 `8ea353d9…` 在 bi150 必 VERIFY_FAIL（已于 2026-10-15 修正：示例不再 pin 引擎指纹）、`survived_sigkill` 对 zombie 误报）见 本仓 `results/2026-10-14-stage3-install/README.md`；审计链留 bi150 `/root/bicameral-sandbox/audit.jsonl` |
 | 4 | task/1 + 路由 PoC | 同一 task 在两台设备各执行一次：结果 schema 一致，`ROUTE` 审计含候选与理由——**达成 2026-10-15**：task.py（stdlib 单文件 573 行：task/1 fail-closed 校验 + result/1 信封归一 + 设备端 execute-local：/issue 最小令牌 agent-ro/llm.complete/单次预算 → /agent/invoke → stdout 单行信封）+ router.py（618 行，不 import task.py、result/1 契约镜像两侧 selftest 互钉；评分策略写入事件本体 interactive=min ttft / batch=max decode_tps，不可行候选留事件注明缘由，load 未采样如实记 null）；同一 qa 任务双机各执行一次（各恰耗 1 次经权限层的 llm.complete），两份 result/1 信封程序化比对全层键集合与类型一致（12 叶值全异、仅 schema 同值）、双侧过仓内 validate_result；ROUTE 审计含双候选与理由（interactive: min ttft → bi150 23.57 ms < jetson 29.77 ms），双机审计各 ISSUE→ALLOW 一对、时差与信封 latency 吻合；归档与对照表见 strata-jetson `results/2026-10-15-stage4-task/README.md`（route-audit.jsonl 双仓副本 sha256_16 `f9a6fce1156d0559` 逐字节一致）。如实注记：① bi150 活模型已漂移为 Qwen3.8-27B（PerfRecord 实测是 Qwen3-0.6B）——信封以 perf_ref + 活 model_id 并列使漂移可见而非掩盖，端到端延迟因此与路由预测反转（31.1 s vs 0.36 s），复测/重 pin 属运维事项；② jetson 执行变体 prompt 带 /no_think、task_id 带 .jetson 后缀（64-token 上限 × Qwen3 thinking 耗尽上限的既证约束），schema 与意图同一；③ jetson 方向 router 全链路彼时正确 DENY D13（18000/18001 被降级 poc-master 持有并记 EXECUTE_FAIL），后经独立实例 18100/18101 execute-local 成功——router→jetson 真机全链路成功未在本阶段复现，事件如实留档 |
-| 5 | 红队轮 | 按 §5 清单实攻，全部折入修复后才算 v1.0 |
+| 5 | 红队轮 | 按 §5 清单实攻，全部折入修复后才算 v1.0——**达成 2026-10-15（v1.0，5/5）**。门标准：确认的代码级漏洞全部修复且复测通过 → 达成；仍有 leaked → 不授予。首轮 12 攻击（6 blocked / 5 leaked / 1 bydesign），复核确认 5（A1/A2/A5/A9/A11）；修复面 A1/A2/A9（另加固 A10）后复测 blocked——perf 指纹+pin、审计哈希链+验链告警、device_audit_digest+verify_result 归档核验均被独立复测证实，回归 A3/A5穿越/A8 确认原防线未松动。缺口 A5/A11 于同日第二批修复并复测 blocked（A5：schema 白名单拒绝 exit 2、proof 未生成；A11：投毒清单 exit 3、零 RESULT 冒名行；回归 apply/route 语义完好，selftest install/router/task/verify_result 全 0 失败）——**v1.0 达成 2026-10-15（5/5 阶段门全过）**。残余如实注记：A2 删末行需外部锚定（运维动作未自动化）、A9 digest 绑授权事件非信封内容（需设备侧签名）、A1 pin 可选+bench 时效窗未实装、负载采样未实装（load:null 如实记）。归档：strata-jetson `results/2026-10-15-stage5-redteam/README.md`；修后工作树未提交（router.py `c96250cd210e6d5e` / task.py `aa9d5deeffae7b89` / verify_result.py `2efc9c0e6648ed57` / devices.json `0830d4e316007fa9`，基线 155f233） |
 
 ---
 

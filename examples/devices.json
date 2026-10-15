@@ -3,17 +3,22 @@
   "devices": [
     {
       "name": "jetson",
-      "local": true,
-      "ssh": null,
-      "run": "python3 /home/nvidia/code/Bicameral/bicameral/task.py execute-local",
+      "transport": "local",
+      "base": "/home/nvidia/code/Bicameral/bicameral/task.py",
+      "agent": "http://127.0.0.1:18001",
+      "control": "http://127.0.0.1:18000",
+      "exec": { "kind": "execute-local" },
       "perf": "results/2026-10-14-probe-bench/perf-jetson.json",
-      "audit_ref": "/tmp/bicameral/audit.jsonl"
+      "audit_ref": "/tmp/bicameral/audit.jsonl",
+      "health_url": "http://127.0.0.1:18100/healthz"
     },
     {
       "name": "bi150",
-      "local": false,
-      "ssh": "-p 31451 root@10.70.251.39",
-      "run": "python3 /root/bicameral/task.py execute-local",
+      "transport": "ssh",
+      "ssh": { "user": "root", "host": "10.70.251.39", "port": 31451 },
+      "base": "/root/bicameral/task.py",
+      "agent": "http://127.0.0.1:18001",
+      "exec": { "kind": "execute-local" },
       "perf": "results/2026-10-14-probe-bench/perf-bi150.json",
       "audit_ref": "/tmp/bicameral/audit.jsonl"
     }
