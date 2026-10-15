@@ -41,8 +41,8 @@ capability token strings, or the master key — only key NAMES, byte sizes,
 short digests, reason codes, and (for SMUGGLE_STRIP) an 80-char sample of the
 stripped attack payload.
 
-Enforce chain order is normative: D1 D2 D3 D4 D11 D9 D5 D6 D15 D8 D12 D10,
-then handler (TooLarge->D9, Degraded->D13, any Exception->D14).
+Enforce chain order is normative: D1 D2 D16 D3 D4 D11 D9 D5 D6 D15 D8 D12 D10,
+then handler (Scope->D7, TooLarge->D9, Degraded->D13, any Exception->D14).
 """
 
 import argparse
@@ -77,6 +77,8 @@ AUDIT_RING_MAX = 512                           # in-memory audit ring
 NONCE_PER_JTI = 256                            # bounded replay-nonce set per token
 NONCE_JTI_MAX = 1024                           # bounded number of tokens tracked
 BURN_THRESHOLD = 3                             # policy denials before token burn
+BUDGET_MAX_TOKENS = 4096                       # bounded budget ledger (expired evicted first)
+DENY_MAX = 8192                                # bounded burn-counter table
 TTL_MAX = 3600                                 # /issue ttl_s clamp
 LLM_TIMEOUT = 60                               # strata chat/completions timeout (s);
                                                # measured round-trip on bi150 was 26.8s for a
@@ -143,6 +145,7 @@ BUDGETS = {}                                   # jti -> {"calls","llm_calls","by
 
 BURNS = set()                                  # jtis burned after repeated policy denials
 DENY_COUNTS = {}                               # jti -> policy-denial count (burn counter)
+JTI_EXP = {}                                   # jti -> exp (drives expired-first eviction/sweep)
 
 
 # --------------------------------------------------------------------------- #
@@ -210,18 +213,26 @@ def audit(event, **fields):
 def nonce_seen(jti, nonce):
     """Per-jti bounded check-and-insert; atomic under lock (deny-side replay guard).
 
-    Partitioned by jti: flooding nonces with one token can only evict that
-    token's OWN slots, never another token's — the cross-token eviction chain
-    found in reflection is structurally closed.
+    Partitioned by jti, and eviction is expired-first: flooding nonces with one
+    token evicts only that token's own slots, and flooding /issue with fresh
+    tokens evicts only EXPIRED tokens' slot sets — a live victim's replay
+    protection can no longer be washed out from either dimension.
     """
     key = str(nonce)
     with NONCE_LOCK:
+        if jti not in NONCES and len(NONCES) >= NONCE_JTI_MAX:
+            now = time.time()
+            dead = sorted((j for j, e in JTI_EXP.items() if e < now),
+                          key=lambda j: JTI_EXP[j])
+            for j in dead:
+                NONCES.pop(j, None)
+                JTI_EXP.pop(j, None)
+            while len(NONCES) >= NONCE_JTI_MAX:
+                NONCES.popitem(last=False)     # oldest-inserted as the last resort
         per = NONCES.get(jti)
         if per is None:
             per = collections.OrderedDict()
             NONCES[jti] = per
-            while len(NONCES) > NONCE_JTI_MAX:
-                NONCES.popitem(last=False)     # oldest token's slots go, not a victim's
         if key in per:
             return True
         per[key] = True
@@ -318,6 +329,25 @@ def _has_forbidden_key(obj):
     return False
 
 
+def _looks_like_envelope(obj):
+    """True if obj is shaped like an EXECUTABLE tool-call envelope.
+
+    An actions/tool_calls key that is a non-empty list of call-shaped dicts.
+    A config file that merely contains an "actions" MAPPING is legitimate
+    data — stripping it corrupted real content (false-positive fix).
+    """
+    if not isinstance(obj, dict):
+        return _has_forbidden_key(obj)
+    acts = obj.get("actions")
+    if isinstance(acts, list) and acts and all(
+            isinstance(a, dict) and ("tool" in a or "name" in a) for a in acts):
+        return True
+    tcs = obj.get("tool_calls")
+    if isinstance(tcs, list) and tcs and all(isinstance(x, dict) for x in tcs):
+        return True
+    return False
+
+
 def bad_schema(tool, params):
     """Strict schema. Returns None if ok, else a short reason string (-> D8)."""
     if not isinstance(params, dict):
@@ -362,7 +392,9 @@ INJECT_PATTERNS = [
     ("role_override", re.compile(
         r"(you\s+are\s+now|pretend\s+to\s+be|act\s+as\s+(an?\s+)?(unrestricted|uncensored|dan\b))", re.I)),
     ("fake_system_tag", re.compile(r"<\s*/?\s*(system|assistant|im_start|im_end)\b", re.I)),
-    ("tool_call_inject", re.compile(r"[\"']?(actions|tool_calls)[\"']?\s*:", re.I)),
+    # envelope shape only: an "actions" MAPPING in legitimate data (config
+    # files) must pass; the executable form is key -> [ {tool/name ...}
+    ("tool_call_inject", re.compile(r"[\"']?(actions|tool_calls)[\"']?\s*:\s*\[\s*\{", re.I)),
 ]
 
 
@@ -422,7 +454,7 @@ def strip_smuggle(text):
     for start, end in _json_objects(text[:100000]):
         blob = text[start:end]
         try:
-            flagged = _has_forbidden_key(json.loads(blob))
+            flagged = _looks_like_envelope(json.loads(blob))
         except Exception:
             flagged = re.search(r"[\"']?(actions|tool_calls)[\"']?\s*:", blob) is not None
         if flagged:
@@ -674,27 +706,45 @@ BURN_ON = {"D5", "D6", "D7", "D12"}            # attacker-probe denials that bur
 def enforce(tok_str, plane, req):
     t = None
 
-    def deny(code, reason, status, **extra):
+    def deny(code, reason, status, audit_extra=None, **extra):
         body = {"ok": False, "reason_code": code + "/" + reason}
         if extra:
             body.update(extra)
+        # audit_extra decouples what the CALLER sees from what the LOG keeps:
+        # D12/D14 keep raw detail out of the audit (redaction promise) or out
+        # of the response (internal-state leak), respectively.
+        detail = extra if audit_extra is None else audit_extra
         audit("DENY", reason_code=body["reason_code"],
               jti=(t or {}).get("jti"), task_id=(t or {}).get("task_id"),
               agent=(t or {}).get("sub"), tool=req.get("tool"),
-              detail=extra or None)
+              detail=detail)
         if t is not None and code in BURN_ON:  # D16: repeated probing burns the token
-            n = DENY_COUNTS.get(t["jti"], 0) + 1
-            DENY_COUNTS[t["jti"]] = n
-            if n >= BURN_THRESHOLD and t["jti"] not in BURNS:
-                BURNS.add(t["jti"])
-                BUDGETS.pop(t["jti"], None)
+            with BUDGET_LOCK:                  # atomic check-and-increment (race fix)
+                n = DENY_COUNTS.get(t["jti"], 0) + 1
+                DENY_COUNTS[t["jti"]] = n
+                burn = n >= BURN_THRESHOLD and t["jti"] not in BURNS
+                if burn:
+                    BURNS.add(t["jti"])
+                    BUDGETS.pop(t["jti"], None)
+            if burn:
                 audit("BURN", jti=t["jti"], denials=n, last=code)
         return status, body
 
     t = verify(tok_str or "")                                               # D1
     if t is None:
         return deny("D1", "TOKEN_INVALID", 401, jti_claim=peek_jti(tok_str or ""))
-    if time.time() > float(t.get("exp", 0)):                                # D2, strict
+    if (not isinstance(t.get("jti"), str) or not t["jti"]                   # D1b: signature
+            or not isinstance(t.get("sub"), str)                            #  valid but
+            or not isinstance(t.get("data_scope"), str)                     #  payload
+            or not isinstance(t.get("tools"), list)                         #  malformed ->
+            or isinstance(t.get("exp"), bool)                               #  reject here,
+            or not isinstance(t.get("exp"), (int, float))):                 #  never 500
+        return deny("D1", "TOKEN_MALFORMED", 401,
+                    jti_claim=t.get("jti") if isinstance(t.get("jti"), str) else None,
+                    audit_extra={"malformed_fields":
+                                 sorted(k for k in ("jti", "sub", "data_scope", "tools", "exp")
+                                        if not t.get(k))})
+    if time.time() > float(t["exp"]):                                       # D2, strict
         return deny("D2", "TOKEN_EXPIRED", 401)
     if t["jti"] in BURNS:                                                   # D16
         return deny("D16", "TOKEN_BURNED", 401)
@@ -717,7 +767,13 @@ def enforce(tok_str, plane, req):
         return deny("D8", "SCHEMA_VIOLATION", 400, what=err)
     hit = inject_hit(req["params"])                                         # D12
     if hit:
-        return deny("D12", "INJECTION_SUSPECTED", 422, hits=hit)
+        # redaction promise: the audit keeps pattern/path/digest only — never
+        # the prompt-text sample (that goes to the caller's 422 body alone)
+        return deny("D12", "INJECTION_SUSPECTED", 422, hits=hit,
+                    audit_extra={"hits": [{"path": h["path"], "pattern": h["pattern"],
+                                           "frag_sha256_16": hashlib.sha256(
+                                               h["sample"].encode("utf-8")).hexdigest()[:16]}
+                                          for h in hit]})
     ok, dim = budget_take(t["jti"], req["tool"],
                           est_bytes(req["tool"], req["params"]))            # D10
     if not ok:
@@ -731,7 +787,9 @@ def enforce(tok_str, plane, req):
     except Degraded:
         return deny("D13", "CAPABILITY_DEGRADED", 503)
     except Exception as e:
-        return deny("D14", "INTERNAL_DENY", 500, err=type(e).__name__)
+        # internal detail stays in the audit, out of the response body
+        return deny("D14", "INTERNAL_DENY", 500,
+                    audit_extra={"err": type(e).__name__})
     result, strip_hits = strip_result(result)     # response-side, every channel
     for h in strip_hits:
         audit("SMUGGLE_STRIP", tool=req["tool"], path=h["path"], sample=h["sample"])
@@ -755,6 +813,8 @@ class BodyError(Exception):
 class Handler(BaseHTTPRequestHandler):
     server_version = "bicameral/0.1.0"
     protocol_version = "HTTP/1.1"
+    timeout = 30            # slow-connection guard: a stalled read/keep-alive
+                            # connection is closed instead of pinning a thread
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s %s\n" % (getattr(self.server, "plane", "?"),
@@ -803,7 +863,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
-            self._send(500, {"ok": False, "error": "handler error: " + type(e).__name__})
+            audit("ERROR", plane=getattr(self.server, "plane", "?"),
+                  path=self.path, err=type(e).__name__)   # type stays out of the body
+            self._send(500, {"ok": False, "error": "handler error"})
 
     def h_issue(self):
         try:
@@ -848,6 +910,16 @@ class Handler(BaseHTTPRequestHandler):
         tok, payload = issue_token(agent, task_id, tools, ttl_s, budget)
         with BUDGET_LOCK:
             BUDGETS[payload["jti"]] = dict(budget)
+            JTI_EXP[payload["jti"]] = payload["exp"]
+            now = time.time()                  # sweep: expired ledgers leave first
+            for j in [j for j, e in JTI_EXP.items() if e < now]:
+                BUDGETS.pop(j, None)
+                DENY_COUNTS.pop(j, None)
+                JTI_EXP.pop(j, None)
+            while len(BUDGETS) > BUDGET_MAX_TOKENS:
+                BUDGETS.popitem(last=False)    # oldest ledger goes (fail-closed: loss = deny)
+            while len(DENY_COUNTS) > DENY_MAX:
+                DENY_COUNTS.popitem(last=False)
         audit("ISSUE", jti=payload["jti"], agent=agent, task_id=task_id,
               tools=payload["tools"], ttl_s=ttl_s, budget=budget)
         self._send(200, {"ok": True, "token": tok, "jti": payload["jti"],
@@ -923,7 +995,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
-            self._send(500, {"ok": False, "error": "handler error: " + type(e).__name__})
+            audit("ERROR", plane=getattr(self.server, "plane", "?"),
+                  path=self.path, err=type(e).__name__)   # type stays out of the body
+            self._send(500, {"ok": False, "error": "handler error"})
 
 
 class Server(ThreadingHTTPServer):

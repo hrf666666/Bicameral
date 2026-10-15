@@ -4,7 +4,7 @@
 >
 > English see [README.md](README.md) · 设计文档 [docs/architecture.md](docs/architecture.md)
 
-**结果一句话**：第三轮红队复测 **16/17**，部署实例实机回归 **24/24**（含真实 LLM 路径）。越权调用、令牌伪造与篡改、nonce 重放、prompt 注入（含经真实 LLM 的间接注入端到端）、2 MB 载荷溢出、调用与推理预算耗尽、探测后熔断——全部拦截。单文件 1,006 行，零依赖。
+**结果一句话**：第三轮红队复测 **16/17**，部署实例实机回归 **24/24**（含真实 LLM 路径）。越权调用、令牌伪造与篡改、nonce 重放、prompt 注入（含经真实 LLM 的间接注入端到端）、2 MB 载荷溢出、调用与推理预算耗尽、探测后熔断——全部拦截。单文件 1083 行，零依赖。
 
 ## 1. 解决什么问题
 
@@ -39,9 +39,9 @@
 |---|---|
 | `D1` | 令牌签名验不过（伪造或篡改） |
 | `D2` | 令牌过期——严格判定，无宽限窗口 |
+| `D16` | 熔断：同一令牌累计 3 次策略拒绝后作废 |
 | `D3` | 一次性 nonce 被重复使用（重放） |
 | `D4` | 令牌用错了平面（控制面令牌打到 agent 面） |
-| `D16` | 熔断：同一令牌累计 3 次策略拒绝后作废 |
 | `D11` | 令牌签发时的策略版本已落后于服务端 |
 | `D9` | 请求体超过 64 KiB 上限 |
 | `D5` | 调用了未注册的工具 |
@@ -82,7 +82,14 @@ curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json'
   -d '{"agent":"agent-ro","task_id":"t1","tools":["fs.read"],"ttl_s":600,
        "budget":{"calls":10,"llm_calls":0,"bytes":65536}}'
 
-# 每次调用都携带令牌；nonce 重复即判重放
+# 可写 agent 先落一个文件（fs.read 的对象得先存在）
+curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json' \
+  -d '{"agent":"agent-rw","task_id":"t2","tools":["fs.write"]}'
+curl -s -X POST http://127.0.0.1:18001/agent/invoke \
+  -H 'Content-Type: application/json' -H 'X-Capability-Token: <rw-token>' \
+  -d '{"nonce":"w-1","tool":"fs.write","params":{"path":"/tmp/bicameral/data/notes.txt","content":"hello","idem_key":"k1"}}'
+
+# 只读 agent 再读它；每次调用都携带令牌，nonce 重复即判重放
 curl -s -X POST http://127.0.0.1:18001/agent/invoke \
   -H 'Content-Type: application/json' -H 'X-Capability-Token: <token>' \
   -d '{"nonce":"n-1","tool":"fs.read","params":{"path":"/tmp/bicameral/data/notes.txt"}}'

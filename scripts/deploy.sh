@@ -13,16 +13,23 @@ AGENTP="${AGENTP:-18001}"
 LOCAL_SHA=$(sha256sum bicameral/server.py | cut -c1-16)
 ssh -o BatchMode=yes -p "$PORT" "$USER@$HOST" "mkdir -p $REMOTE_DIR"
 scp -o BatchMode=yes -P "$PORT" bicameral/server.py "$USER@$HOST:$REMOTE_DIR/server.py"
-ssh -o BatchMode=yes -p "$PORT" "$USER@$HOST" "
-  REMOTE_SHA=\$(sha256sum $REMOTE_DIR/server.py | cut -c1-16)
-  [ \"\$REMOTE_SHA\" = \"$LOCAL_SHA\" ] || { echo \"SHA mismatch: \$REMOTE_SHA != $LOCAL_SHA\"; exit 1; }
-  pkill -f '^python3 server' 2>/dev/null || true
-  sleep 1
-  cd $REMOTE_DIR && setsid nohup python3 server.py \
-    --control-port $CONTROL --agent-port $AGENTP \
-    >\$REMOTE_DIR/poc.log 2>&1 </dev/null &
-  sleep 2
-  curl -s -m 5 http://127.0.0.1:$CONTROL/healthz
-  echo
-"
+# remote script via stdin (quoted heredoc: nothing expands locally; the remote
+# shell's argv is just "bash -s", so the pkill pattern can never match it)
+ssh -o BatchMode=yes -p "$PORT" "$USER@$HOST" \
+  LOCAL_SHA="$LOCAL_SHA" REMOTE_DIR="$REMOTE_DIR" CONTROL="$CONTROL" AGENTP="$AGENTP" 'bash -s' <<'REMOTE'
+set -euo pipefail
+REMOTE_SHA=$(sha256sum "$REMOTE_DIR/server.py" | cut -c1-16)
+[ "$REMOTE_SHA" = "$LOCAL_SHA" ] || { echo "SHA mismatch: $REMOTE_SHA != $LOCAL_SHA"; exit 1; }
+# match both launch forms: "python3 server.py" (cwd-launched) and the full path
+pkill -f "python3 ($REMOTE_DIR/)?server\.py" 2>/dev/null || true
+sleep 1
+cd "$REMOTE_DIR"
+setsid nohup python3 server.py --control-port "$CONTROL" --agent-port "$AGENTP" \
+  >"$REMOTE_DIR/poc.log" 2>&1 </dev/null &
+sleep 2
+HEALTH=$(curl -s -m 5 "http://127.0.0.1:$CONTROL/healthz")
+echo "$HEALTH"
+echo "$HEALTH" | grep -q "$LOCAL_SHA" || {
+  echo "FINGERPRINT MISMATCH: running instance is not this build"; exit 1; }
+REMOTE
 echo "deployed: local build_sha=$LOCAL_SHA"

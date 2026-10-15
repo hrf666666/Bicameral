@@ -3,9 +3,7 @@
   "name": "qwen3-1.7b-q8_0",
   "engine": {
     "name": "llama.cpp",
-    "ref": "b11062",
-    "binary": "/home/nvidia/code/strata-jetson/work/llama-build/bin/llama-server",
-    "sha256": "8ea353d9d67439bea8ad6af8270c6fa2066f3adf3da7710bdfa190d072d684a8"
+    "binary": "/opt/llama.cpp/bin/llama-server"
   },
   "model": {
     "repo": "Qwen/Qwen3-1.7B-GGUF",

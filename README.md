@@ -4,7 +4,7 @@
 >
 > 中文说明见 [README.zh-CN.md](README.zh-CN.md) · 设计文档 [docs/architecture.md](docs/architecture.md)
 
-**Bottom line**: third-round red team **16/17**, live regression **24/24** on the deploy host (including the real-LLM path). Privilege escalation, token forgery and tampering, nonce replay, prompt injection (including indirect injection end-to-end through a real LLM), 2 MB payload overflow, call- and LLM-budget exhaustion, and token burning after repeated probing — all blocked. 1,006 lines, zero dependencies.
+**Bottom line**: third-round red team **16/17**, live regression **24/24** on the deploy host (including the real-LLM path). Privilege escalation, token forgery and tampering, nonce replay, prompt injection (including indirect injection end-to-end through a real LLM), 2 MB payload overflow, call- and LLM-budget exhaustion, and token burning after repeated probing — all blocked. 1083 lines, zero dependencies.
 
 ## 1. What problem it solves
 
@@ -39,9 +39,9 @@ Every rejected call returns `reason_code = <code>/<constant>`. Sixteen checks ru
 |---|---|
 | `D1` | token signature doesn't verify (forged or tampered) |
 | `D2` | token expired — strict, no grace window |
+| `D16` | token burned: 3 policy denials on the same token |
 | `D3` | the one-time nonce was reused (replay) |
 | `D4` | token used on the wrong plane (control token on the agent plane) |
-| `D16` | token burned: 3 policy denials on the same token |
 | `D11` | token was issued under an older policy version |
 | `D9` | body over the 64 KiB cap |
 | `D5` | tool not in the registry |
@@ -82,7 +82,14 @@ curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json'
   -d '{"agent":"agent-ro","task_id":"t1","tools":["fs.read"],"ttl_s":600,
        "budget":{"calls":10,"llm_calls":0,"bytes":65536}}'
 
-# carry it on every call; a repeated nonce is rejected as a replay
+# a writable agent puts the file there first (fs.read needs it to exist)
+curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json' \
+  -d '{"agent":"agent-rw","task_id":"t2","tools":["fs.write"]}'
+curl -s -X POST http://127.0.0.1:18001/agent/invoke \
+  -H 'Content-Type: application/json' -H 'X-Capability-Token: <rw-token>' \
+  -d '{"nonce":"w-1","tool":"fs.write","params":{"path":"/tmp/bicameral/data/notes.txt","content":"hello","idem_key":"k1"}}'
+
+# then read it with the read-only token; a repeated nonce is rejected as a replay
 curl -s -X POST http://127.0.0.1:18001/agent/invoke \
   -H 'Content-Type: application/json' -H 'X-Capability-Token: <token>' \
   -d '{"nonce":"n-1","tool":"fs.read","params":{"path":"/tmp/bicameral/data/notes.txt"}}'
@@ -92,7 +99,7 @@ curl -s -X POST http://127.0.0.1:18001/agent/invoke \
 
 ```bash
 HOST=<host> PORT=22 USER=root ./scripts/deploy.sh   # upload, restart, fingerprint check
-python3 scripts/live_check.py                        # 24-check regression on the deploy host
+python3 scripts/live_check.py --expect-sha $(sha256sum bicameral/server.py | cut -c1-16)  # 24-check regression
 ```
 
 `/healthz` exposes `build_sha` (the running source's fingerprint). A deployment counts as good only when the remote `build_sha` equals the local `sha256sum` — this has already caught one silent version drift.

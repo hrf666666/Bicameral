@@ -9,23 +9,30 @@ fs.write: sandboxed directories, size caps, bounded timeouts and retries,
 audit events — 与 server.py 同一工程哲学 (stdlib single file).
 
 Subcommands:
-    apply <appspec.json>    absent → ready (idempotent: dedup by
-                            name + model sha256; a re-apply on a ready app
-                            skips the download and re-achieves READY)
+    apply <appspec.json>    absent → ready (idempotent: dedup by name +
+                            model sha256 + deployment facts — port, health,
+                            rendered args, engine — any drift restarts; a
+                            re-apply on a ready app skips the download and
+                            re-achieves READY)
     rollback <name>         remove one app, kill the process it started,
                             install_state → absent
     status [name]           report install_state from sandbox markers plus
                             live pid/health checks
     selftest                pure-function self-test (schema validation,
-                            URL building, dedup decisions, redaction)
+                            URL building, dedup decisions, redaction,
+                            pid-state/argv parsing, audit fail-closed)
 
-Flow of apply (each step audited; ANY failure → rollback):
+Flow of apply (each step audited; ANY failure → rollback; the whole flow
+runs under an exclusive <sandbox>/apps/<name>.lock — a second concurrent
+apply of the same app exits 6 instead of racing the first):
     read appspec → validate schema → probe current install_state (sandbox
     marker + filesystem/service facts) → resolve engine (dual sha256, §5) →
-    download model (mirror_urls tried in order, bounded retries/timeouts) →
-    verify sha256 (mismatch ⇒ VERIFY_FAIL, the file is never installed) →
-    place into <sandbox>/apps/<name>/ → start service → health check (the
-    health endpoint must answer HTTP 200) → re-run probe/1 to refresh
+    download model (mirror_urls tried in order, bounded retries/timeouts; a
+    hash mismatch on one mirror only fails that attempt) → verify sha256
+    (mismatch ⇒ VERIFY_FAIL, the file is never installed) → place into
+    <sandbox>/apps/<name>/ → start service → health check (the health
+    endpoint must answer HTTP 200; an exited child is detected at once) →
+    re-verify the placed sha256 (TOCTOU guard) → re-run probe/1 to refresh
     install_state → READY.
 
 Sandbox layout (default /root/bicameral-sandbox per paradigm; override with
@@ -34,15 +41,19 @@ non-root box redirect it):
     <sandbox>/apps/<name>/models/<file>                    installed model
     <sandbox>/apps/<name>/.bicameral-install-state.json    marker (state/pid/sha)
     <sandbox>/apps/<name>/service.log                      service stdout+stderr
-    <sandbox>/downloads/<name>-<sha12>.part                in-flight download
-    <sandbox>/audit.jsonl                                  audit trail
+    <sandbox>/apps/<name>.lock                             apply/rollback mutex
+    <sandbox>/downloads/<name>-<sha12>-<pid>.part          in-flight download
+    <sandbox>/audit.jsonl                                  audit trail (mandatory
+                                                           for apply/rollback:
+                                                           fail-closed when
+                                                           unavailable)
 
 Audit events (style-aligned with bicameral/server.py: ts + event + key
 summary, never secrets — mirror URLs are redacted to scheme://host/path so a
 token-bearing query never lands in the log):
     INSTALL_START, STATE, DEDUP, ENGINE_FOUND, DOWNLOAD, VERIFY_OK,
     VERIFY_FAIL, PLACE, START, HEALTH, PROBE_REFRESH, READY, INSTALL_FAIL,
-    ROLLBACK.
+    ROLLBACK, AUDIT_DEGRADED (close-time: audit writes lost mid-flow).
 
 Dual sha256 semantics (paradigm §5 supply-chain row: "appspec 双 sha256 +
 下载后校验 + 安装目录指纹入审计"):
@@ -55,8 +66,10 @@ Dual sha256 semantics (paradigm §5 supply-chain row: "appspec 双 sha256 +
       fingerprinted into the audit trail — a fingerprint is a fact even
       without a pin.
 
-Exit codes: 0 ok · 2 usage/schema · 3 engine/download/verify failure ·
-4 start/health failure · 5 rollback itself also failed.
+Exit codes: 0 ok · 1 audit degraded (apply succeeded but events were lost) ·
+2 usage/schema/audit-unavailable · 3 engine/download/verify failure ·
+4 start/health failure · 5 rollback itself also failed · 6 another install
+in progress (app lock held or unusable).
 
 Python 3.10+, standard library only, no root required (only the default
 sandbox path assumes it).
@@ -65,6 +78,7 @@ sandbox path assumes it).
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import hashlib
 import json
@@ -98,7 +112,10 @@ APPSPEC_ENGINE_BINARIES = {
 LIMITS = {
     "model_max_bytes": 32 * 1024 ** 3,     # hard cap on one model download
     "download_read_timeout_s": 60,         # per-socket-read timeout
-    "download_attempt_deadline_s": 900,    # wall clock per attempt (bounded)
+    "download_attempt_deadline_s": 900,    # wall clock per attempt (floor;
+                                           # extended for known Content-Length)
+    "download_min_bytes_per_s": 8 * 1024 ** 2,   # rate the deadline assumes
+    "download_stall_timeout_s": 120,       # no-new-bytes budget per attempt
     "download_retries_per_mirror": 2,      # attempts per mirror (bounded)
     "download_retry_backoff_s": 2.0,       # sleep between attempts
     "download_mirror_max": 8,              # max mirror_urls accepted
@@ -184,20 +201,46 @@ def http_status(url: str, timeout: float) -> int | None:
         return None
 
 
+class NoDowngradeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """urllib redirect policy: never follow https → plain http. Returning
+    None makes the opener raise the redirect as an HTTPError, which the
+    download loop records as a failed attempt (selftest-covered)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old = urllib.parse.urlsplit(req.full_url)
+        new = urllib.parse.urlsplit(newurl)
+        if old.scheme == "https" and new.scheme != "https":
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 # --------------------------------------------------------------------------- #
 # audit (style-aligned with server.py: ts + event + non-None fields, JSONL)
 # --------------------------------------------------------------------------- #
 
 class Audit:
+    """JSONL audit trail — mandatory for mutating flows: when the file cannot
+    be opened, apply/rollback must fail closed (callers gate on `usable`).
+    Write errors mid-flow are counted; close() surfaces them as an
+    AUDIT_DEGRADED event on stderr and returns the lost count, which the
+    caller turns into a non-zero exit."""
+
     def __init__(self, path: str):
         self.path = path
         self._f = None
+        self._closed = False
+        self.lost = 0
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             self._f = open(path, "a", encoding="utf-8")
         except OSError as e:
-            now_note("audit unavailable at %s (%s); events go to stderr only"
+            self.lost += 1
+            now_note("audit unavailable at %s (%s); flow must fail closed"
                      % (path, e))
+
+    @property
+    def usable(self) -> bool:
+        return self._f is not None
 
     def emit(self, event: str, **fields) -> None:
         rec = {"ts": round(time.time(), 3), "event": event}
@@ -209,14 +252,26 @@ class Audit:
                 self._f.write(line + "\n")
                 self._f.flush()
             except OSError:
-                pass
+                self.lost += 1          # degraded; surfaced at close()
 
-    def close(self) -> None:
-        if self._f is not None:
-            try:
-                self._f.close()
-            except OSError:
-                pass
+    def close(self) -> int:
+        """Close the trail (idempotent); returns the number of lost events
+        (>0 ⇒ degraded). A non-zero count is also reported on stderr as an
+        AUDIT_DEGRADED event."""
+        if not self._closed:
+            self._closed = True
+            if self._f is not None:
+                try:
+                    self._f.close()
+                except OSError:
+                    self.lost += 1
+                self._f = None
+            if self.lost:
+                rec = {"ts": round(time.time(), 3), "event": "AUDIT_DEGRADED",
+                       "path": self.path, "lost": self.lost}
+                now_note(json.dumps(rec, ensure_ascii=False,
+                                    separators=(",", ":")))
+        return self.lost
 
 
 # --------------------------------------------------------------------------- #
@@ -399,7 +454,37 @@ def sandbox_paths(sandbox: str, name: str) -> dict:
     return {"sandbox": sandbox, "apps": apps, "app": os.path.join(apps, name),
             "models": os.path.join(apps, name, "models"),
             "marker": os.path.join(apps, name, MARKER_NAME),
-            "downloads": os.path.join(sandbox, "downloads")}
+            "downloads": os.path.join(sandbox, "downloads"),
+            "lock": os.path.join(apps, "%s.lock" % name)}
+
+
+def acquire_app_lock(p: dict) -> int | None:
+    """Try to take LOCK_EX|LOCK_NB on <sandbox>/apps/<name>.lock. The whole
+    apply/rollback runs under it, so two concurrent installs of one app can
+    never interleave (the loser gets None → exit 6). Returns the fd to hold,
+    or None when another process holds the lock. Raises OSError when the
+    lock file itself is unusable."""
+    os.makedirs(p["apps"], exist_ok=True)
+    fd = os.open(p["lock"], os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def release_app_lock(fd: int | None) -> None:
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
 
 
 def model_target(p: dict, spec: dict) -> str:
@@ -431,40 +516,69 @@ def remove_marker(p: dict) -> None:
         pass
 
 
-def pid_alive(pid) -> bool:
+def _stat_state(data: str) -> str | None:
+    """State letter from a /proc/<pid>/stat payload. Kernel format is
+    `pid (comm) state …` and comm may contain spaces and parens, so parse
+    after the LAST ')'. Pure; selftest-covered."""
     try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+        rest = data[data.rindex(")") + 1:].strip()
+        return rest.split()[0] if rest else None
+    except (ValueError, IndexError):
+        return None
 
 
-def cmdline_of(pid) -> str | None:
+def proc_state(pid) -> str | None:
+    """'R','S','Z',… from /proc/<pid>/stat; None when there is no such proc."""
     try:
-        with open("/proc/%d/cmdline" % int(pid), "rb") as f:
-            return f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+        with open("/proc/%d/stat" % int(pid), "r", encoding="ascii",
+                  errors="replace") as f:
+            return _stat_state(f.read())
     except (OSError, TypeError, ValueError):
         return None
 
 
+def pid_alive(pid) -> bool:
+    """True only for a live process: a zombie (state Z) counts as dead, so
+    `os.kill(pid, 0)`-style false positives never report a dead child as
+    running (survived_sigkill would otherwise lie)."""
+    st = proc_state(pid)
+    return st is not None and st != "Z"
+
+
+def parse_cmdline(data: bytes) -> list[str]:
+    """argv from raw /proc/<pid>/cmdline: NUL-separated, trailing empty
+    entry dropped. Pure; selftest-covered."""
+    parts = data.split(b"\x00")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    return [p.decode("utf-8", "replace") for p in parts]
+
+
+def argv_of(pid) -> list[str] | None:
+    """Exact argv of a pid, or None when unreadable (process gone / race)."""
+    try:
+        with open("/proc/%d/cmdline" % int(pid), "rb") as f:
+            data = f.read()
+    except (OSError, TypeError, ValueError):
+        return None
+    return parse_cmdline(data) or None
+
+
 def install_state_of(spec: dict, p: dict, engine_info: dict | None,
-                     service_ok: bool | None,
-                     skip_model_hash: bool = False) -> tuple[str, list[str]]:
+                     service_ok: bool | None) -> tuple[str, list[str]]:
     """absent/partial/ready per probe.eval_appspec semantics (§3.1 #4),
     computed from sandbox + filesystem facts. service_ok=None means the
     service is not checked (used on the READY path, where the health check
-    just passed); skip_model_hash trusts the just-verified download."""
+    just passed). The model file is ALWAYS hash-verified: cmd_apply calls
+    this again right before READY as a TOCTOU guard, so a model corrupted
+    (or swapped) after placement can never be reported ready."""
     missing: list[str] = []
     engine_present = bool(engine_info and engine_info.get("found"))
     if not engine_present:
         missing.append("engine %r binary not found" % spec["engine"]["name"])
     target = model_target(p, spec)
     model_present = False
-    if skip_model_hash:
-        model_present = os.path.isfile(target)
-        if not model_present:
-            missing.append("model file not found: %s" % target)
-    elif os.path.isfile(target):
+    if os.path.isfile(target):
         try:
             if sha256_file(target) == spec["model"]["sha256"]:
                 model_present = True
@@ -483,13 +597,40 @@ def install_state_of(spec: dict, p: dict, engine_info: dict | None,
     return "ready", []
 
 
+def deployment_facts(spec: dict, engine_binary: str, engine_sha256_16: str,
+                     model_path: str, app_dir: str) -> dict:
+    """The service-defining facts this appspec+engine would deploy right now
+    (selftest-covered). name+model sha256 alone is too coarse a dedup key:
+    a changed port/health/args/engine must restart, never be silently
+    reused under a marker that mixes old and new facts."""
+    return {"port": spec["service"]["port"],
+            "health": spec["service"]["health"],
+            "argv": [engine_binary] + render_args(spec["service"]["args"],
+                                                  spec, model_path, app_dir),
+            "engine_binary": engine_binary,
+            "engine_sha256_16": engine_sha256_16}
+
+
+def facts_drift(marker: dict | None, facts: dict) -> list[str]:
+    """Fields where the recorded deployment differs from the wanted one.
+    Pure; selftest-covered."""
+    if marker is None:
+        return []
+    return [k for k in ("port", "health", "argv", "engine_binary",
+                        "engine_sha256_16") if marker.get(k) != facts[k]]
+
+
 def decide_resume(marker: dict | None, spec: dict, model_sha_ok: bool,
-                  service_ok: bool) -> tuple[str, str]:
+                  service_ok: bool,
+                  facts: dict | None = None) -> tuple[str, str]:
     """Pure idempotency decision (selftest-covered).
 
     dedup_ready : marker on record, same name+model sha256, model file
-                  verified, service healthy → no download, straight to READY.
-    restart     : same, but service down → start it again (no download).
+                  verified, deployment facts identical, service healthy →
+                  no download, straight to READY.
+    restart     : same key, but the service is down OR any deployment fact
+                  (port/health/argv/engine) drifted → kill the old process
+                  and start a new one (no download).
     resume      : same key but model file missing/corrupt → re-download only.
     superseded  : same name, DIFFERENT model sha256 → roll the old one back,
                   then install fresh.
@@ -501,6 +642,9 @@ def decide_resume(marker: dict | None, spec: dict, model_sha_ok: bool,
         return "superseded", "marker model_sha256 differs from appspec pin"
     if not model_sha_ok:
         return "resume", "same key but model file missing/failed hash"
+    drift = facts_drift(marker, facts) if facts is not None else []
+    if drift:
+        return "restart", "deployment facts changed: %s" % ", ".join(drift)
     if service_ok:
         return "dedup_ready", "same name+model sha256, service healthy"
     return "restart", "same name+model sha256, service down"
@@ -583,63 +727,115 @@ def _discard_part(part_path: str) -> None:
         pass
 
 
+def attempt_budget(content_length: int | None) -> float:
+    """Wall-clock budget for one download attempt: the fixed floor, extended
+    when Content-Length is known so a legitimately large model still fits at
+    the assumed minimum sustained rate (the fixed 900s and the 32 GiB cap
+    are otherwise contradictory). Pure; selftest-covered."""
+    budget = float(LIMITS["download_attempt_deadline_s"])
+    if content_length is not None:
+        budget = max(budget,
+                     content_length / LIMITS["download_min_bytes_per_s"])
+    return budget
+
+
 def download_model(audit: Audit, app: str, urls: list[str], part_path: str,
                    want_sha: str) -> tuple[str, int]:
     """Stream the model to part_path, hashing as we go. mirror_urls tried in
-    order; bounded retries per mirror, bounded per-attempt wall clock, hard
-    size cap. A sha256 mismatch is VERIFY_FAIL and never installed.
+    order; bounded retries per mirror; per-attempt wall clock is the fixed
+    floor extended for a known Content-Length, with a no-new-bytes stall
+    guard; hard size cap enforced before (Content-Length) and during the
+    transfer. Redirects never downgrade https → http.
+
+    A sha256 mismatch on ONE mirror/attempt is just that attempt failing
+    (VERIFY_FAIL final=false, part discarded, next attempt/mirror); only
+    when every mirror and retry is exhausted on mismatches is it fatal
+    (VERIFY_FAIL, exit 3). Other InstallErrors (size cap) fail immediately.
+    The file is never installed unless it hashes to the pin.
     Returns (sha256_hex, bytes). Raises InstallError(step='download')."""
+    if not urls:
+        raise InstallError("download", "no mirror URLs given", 3)
     last_err = "no mirror attempted"
+    all_hash = True                     # every failure so far a hash mismatch
+    opener = urllib.request.build_opener(NoDowngradeRedirectHandler())
     for mi, url in enumerate(urls):
         red = redact_url(url)
         for attempt in range(1, LIMITS["download_retries_per_mirror"] + 1):
-            deadline = time.monotonic() + LIMITS["download_attempt_deadline_s"]
+            t_start = time.monotonic()
+            deadline = t_start + attempt_budget(None)
             try:
                 req = urllib.request.Request(
                     url, headers={"User-Agent": "bicameral-install/1"})
                 h = hashlib.sha256()
                 size = 0
-                with urllib.request.urlopen(
+                with opener.open(
                         req, timeout=LIMITS["download_read_timeout_s"]) as r, \
                         open(part_path, "wb") as out:
+                    cl = r.headers.get("Content-Length")
+                    total = int(cl) if cl and cl.isdigit() else None
+                    if total is not None and total > LIMITS["model_max_bytes"]:
+                        raise InstallError(
+                            "download",
+                            "content-length %d exceeds model_max_bytes (%d)"
+                            % (total, LIMITS["model_max_bytes"]), 3)
+                    deadline = t_start + attempt_budget(total)
+                    last_progress = time.monotonic()
                     while True:
-                        if time.monotonic() > deadline:
+                        now = time.monotonic()
+                        if now > deadline:
                             raise TimeoutError(
-                                "attempt deadline %ds exceeded"
-                                % LIMITS["download_attempt_deadline_s"])
+                                "attempt deadline %.0fs exceeded (budget "
+                                "%.0fs)" % (now - t_start, deadline - t_start))
+                        if now - last_progress > \
+                                LIMITS["download_stall_timeout_s"]:
+                            raise TimeoutError(
+                                "stalled: no bytes for %ds"
+                                % LIMITS["download_stall_timeout_s"])
                         chunk = r.read(1 << 20)
                         if not chunk:
                             break
+                        last_progress = time.monotonic()
                         size += len(chunk)
                         if size > LIMITS["model_max_bytes"]:
-                            raise ValueError(
+                            raise InstallError(
+                                "download",
                                 "size exceeds model_max_bytes (%d)"
-                                % LIMITS["model_max_bytes"])
+                                % LIMITS["model_max_bytes"], 3)
                         h.update(chunk)
                         out.write(chunk)
                 got = h.hexdigest()
                 if got != want_sha:
+                    last_err = ("VERIFY_FAIL: sha256 mismatch (got %s…)"
+                                % got[:16])
                     audit.emit("VERIFY_FAIL", app=app, what="model",
-                               file=os.path.basename(part_path),
-                               expected_sha256=want_sha, got_sha256_16=got[:16],
-                               mirror=mi + 1, url=red, bytes=size)
+                               final=False, file=os.path.basename(part_path),
+                               expected_sha256=want_sha,
+                               got_sha256_16=got[:16], mirror=mi + 1,
+                               attempt=attempt, url=red, bytes=size)
                     _discard_part(part_path)
-                    raise InstallError(
-                        "download", "VERIFY_FAIL: sha256 mismatch (got %s…)"
-                        % got[:16], 3)
-                audit.emit("DOWNLOAD", app=app, status="ok", mirror=mi + 1,
-                           attempt=attempt, url=red, bytes=size,
-                           sha256_16=got[:16])
-                return got, size
+                    # not fatal: this attempt failed, try again / next mirror
+                else:
+                    audit.emit("DOWNLOAD", app=app, status="ok",
+                               mirror=mi + 1, attempt=attempt,
+                               url=redact_url(r.geturl()), bytes=size,
+                               sha256_16=got[:16])
+                    return got, size
             except InstallError:
-                raise
+                raise                    # size cap & co fail immediately
             except Exception as e:  # noqa: BLE001 — a failed mirror is a fact
                 last_err = "%s: %s" % (type(e).__name__, str(e)[:200])
+                all_hash = False
                 _discard_part(part_path)
                 audit.emit("DOWNLOAD", app=app, status="fail", mirror=mi + 1,
                            attempt=attempt, url=red, error=last_err)
-                if attempt < LIMITS["download_retries_per_mirror"]:
-                    time.sleep(LIMITS["download_retry_backoff_s"])
+            if attempt < LIMITS["download_retries_per_mirror"]:
+                time.sleep(LIMITS["download_retry_backoff_s"])
+    if all_hash:
+        audit.emit("VERIFY_FAIL", app=app, what="model", final=True,
+                   expected_sha256=want_sha, error=last_err)
+        raise InstallError("download",
+                           "VERIFY_FAIL: sha256 mismatch on every mirror/"
+                           "attempt (last: %s)" % last_err, 3)
     raise InstallError("download", "all mirrors exhausted (last: %s)" % last_err, 3)
 
 
@@ -673,16 +869,31 @@ def start_service(audit: Audit, app: str, engine_binary: str, spec: dict,
     return proc, [engine_binary] + args
 
 
-def stop_process(pid, verify_substrings: list[str] | None,
-                 grace: float) -> str:
-    """SIGTERM → wait grace → SIGKILL. When verify_substrings is given, the
-    kill only proceeds if /proc/<pid>/cmdline matches one of them — a stale
-    or recycled pid is never signalled. Returns an audit-ready outcome."""
+def argv_matches(live: list[str], recorded: list[str]) -> bool:
+    """Exact identity of the argv recorded at START against a live
+    /proc/<pid>/cmdline (pure; selftest-covered). Normally the two are
+    equal; a script started via a shebang shows the interpreter as
+    argv[0], so the recorded argv then appears verbatim at live[1:] —
+    accepted. Anything else (recycled pid, unrelated process whose cmdline
+    merely contains the app dir) is a no."""
+    if not live or not recorded:
+        return False
+    return live == recorded or (len(live) > 1 and live[1:] == recorded)
+
+
+def stop_process(pid, verify_argv: list[str] | None, grace: float) -> str:
+    """SIGTERM → wait grace → SIGKILL. When verify_argv is given, the kill
+    only proceeds if /proc/<pid>/cmdline equals that argv exactly (NUL-split,
+    trailing empty entry dropped; see argv_matches for the shebang shape) —
+    a stale or recycled pid, or an unrelated process whose cmdline merely
+    contains the app dir (e.g. tail -f of the log), is never signalled.
+    Returns an audit-ready outcome."""
     if not pid_alive(pid):
         return "already_dead"
-    if verify_substrings is not None:
-        cl = cmdline_of(pid)
-        if cl is None or not any(s and s in cl for s in verify_substrings):
+    if verify_argv is not None:
+        live = argv_of(pid)
+        if live is None or not argv_matches(live,
+                                            [str(a) for a in verify_argv]):
             return "skipped_unverified"
     try:
         os.kill(int(pid), signal.SIGTERM)
@@ -702,13 +913,22 @@ def stop_process(pid, verify_substrings: list[str] | None,
 
 
 def wait_health(audit: Audit, app: str, port: int, health: str,
-                timeout_s: float) -> bool:
-    """Poll GET http://127.0.0.1:<port><health> until 200 or budget out."""
+                timeout_s: float,
+                proc: subprocess.Popen | None = None) -> bool:
+    """Poll GET http://127.0.0.1:<port><health> until 200 or budget out.
+    When `proc` is the child we started, a child exit is detected on every
+    poll — a dead process must never be awaited into a fake READY."""
     url = "http://127.0.0.1:%d%s" % (port, health)
     t0 = time.monotonic()
     attempts, last = 0, None
     while time.monotonic() - t0 < timeout_s:
         attempts += 1
+        if proc is not None and proc.poll() is not None:
+            audit.emit("HEALTH", app=app, port=port, path=health,
+                       proc_exited=True, returncode=proc.returncode,
+                       attempts=attempts,
+                       elapsed_ms=int((time.monotonic() - t0) * 1000))
+            return False
         last = http_status(url, LIMITS["health_poll_timeout_s"])
         if last == 200:
             audit.emit("HEALTH", app=app, port=port, path=health,
@@ -786,9 +1006,11 @@ def probe_refresh(audit: Audit, app: str, appspec_path: str, p: dict) -> dict | 
 def rollback(audit: Audit, p: dict, name: str, reason: str,
              popen: subprocess.Popen | None = None) -> bool:
     """Remove the app dir, kill the process we started, state → absent.
-    The kill is verified against the argv recorded at START (exact cmdline
-    match; the app dir as fallback) — a stale or recycled pid is never
-    signalled. Returns True when nothing was left behind (best effort)."""
+    The kill is verified against the argv recorded at START (exact match of
+    /proc/<pid>/cmdline) — a stale or recycled pid is never signalled. When
+    the marker carries no argv the pid is still our own marker fact, so it
+    is signalled unverified rather than leak a live service. Returns True
+    when nothing was left behind (best effort)."""
     killed = None
     if popen is not None:
         try:
@@ -805,10 +1027,11 @@ def rollback(audit: Audit, p: dict, name: str, reason: str,
         pid = marker.get("pid")
         if pid:
             argv = marker.get("argv")
-            verify = [" ".join(argv)] if isinstance(argv, list) and argv else []
-            verify.append(p["app"])
-            killed = stop_process(pid, verify_substrings=verify,
-                                  grace=LIMITS["kill_grace_s"])
+            killed = stop_process(
+                pid,
+                verify_argv=argv
+                if isinstance(argv, list) and argv else None,
+                grace=LIMITS["kill_grace_s"])
     removed = False
     if os.path.isdir(p["app"]) and path_inside(os.path.join(p["sandbox"], "apps"),
                                                p["app"]):
@@ -829,10 +1052,22 @@ def rollback(audit: Audit, p: dict, name: str, reason: str,
 def cmd_apply(args) -> int:
     sandbox = os.path.abspath(args.sandbox_root)
     audit = Audit(args.audit_path or os.path.join(sandbox, AUDIT_NAME))
+    if not audit.usable:               # fail-closed: no audit trail, no change
+        now_note("refusing to apply: audit file unavailable (fail-closed)")
+        audit.close()
+        return 2
     p = None
     spec = None
     name = None
     popen = None                    # child we started; killed on any failure
+    lock_fd = None                  # <sandbox>/apps/<name>.lock, held throughout
+
+    def finish(code: int) -> int:
+        """Single exit path: close the audit trail; a run that succeeded
+        while losing audit events must not report success (exit 1)."""
+        lost = audit.close()
+        return code if (code != 0 or lost == 0) else 1
+
     try:
         try:
             with open(args.appspec, "r", encoding="utf-8") as f:
@@ -841,7 +1076,7 @@ def cmd_apply(args) -> int:
             audit.emit("INSTALL_FAIL", step="read", appspec=args.appspec,
                        error="%s: %s" % (type(e).__name__, str(e)[:200]))
             now_note("appspec unreadable/invalid: %s" % e)
-            return 2
+            return finish(2)
         spec, err = validate_appspec(raw)
         name = spec["name"] if spec else \
             (raw.get("name") if isinstance(raw, dict) else None)
@@ -851,9 +1086,17 @@ def cmd_apply(args) -> int:
                        if os.path.isfile(args.appspec) else None,
                        error=err)
             now_note("schema violation: %s" % err)
-            return 2
+            return finish(2)
 
         p = sandbox_paths(sandbox, name)
+        try:
+            lock_fd = acquire_app_lock(p)
+        except OSError as e:
+            raise InstallError("lock", "app lock unusable at %s: %s"
+                               % (p["lock"], e), 6) from e
+        if lock_fd is None:
+            raise InstallError("lock", "another install is in progress for "
+                               "%r" % name, 6)
         audit.emit("INSTALL_START", app=name,
                    appspec_sha256_16=sha256_16(args.appspec),
                    dedup_key=dedup_key(spec), sandbox=p["sandbox"])
@@ -882,9 +1125,14 @@ def cmd_apply(args) -> int:
 
         # --- idempotency decision ----------------------------------------- #
         model_ok_now = not pre_missing or all("model" not in m for m in pre_missing)
-        action, why = decide_resume(marker, spec, model_ok_now, service_ok)
+        target = model_target(p, spec)
+        facts = deployment_facts(spec, engine_info["binary"],
+                                 engine_info["sha256_16"], target, p["app"])
+        argv = facts["argv"]            # this run's facts; replaced by the
+                                        # real spawn on fresh/restart paths
+        action, why = decide_resume(marker, spec, model_ok_now, service_ok,
+                                    facts=facts)
         audit.emit("STATE", app=name, phase="decision", action=action, why=why)
-        argv = (marker or {}).get("argv")   # kept on the dedup path, replaced on start
 
         if action == "superseded":
             rollback(audit, p, name, "superseded_by_new_model_sha256",
@@ -894,16 +1142,15 @@ def cmd_apply(args) -> int:
         if action in ("dedup_ready", "restart"):
             # idempotent path: no download
             audit.emit("DEDUP", app=name, key=dedup_key(spec), why=why)
-            target = model_target(p, spec)
             if action == "restart":
                 old_pid = (marker or {}).get("pid")
                 if old_pid:
                     old_argv = (marker or {}).get("argv")
-                    verify = ([" ".join(old_argv)]
-                              if isinstance(old_argv, list) and old_argv else [])
-                    verify.append(p["app"])
-                    outcome = stop_process(old_pid, verify_substrings=verify,
-                                           grace=LIMITS["kill_grace_s"])
+                    outcome = stop_process(
+                        old_pid,
+                        verify_argv=old_argv
+                        if isinstance(old_argv, list) and old_argv else None,
+                        grace=LIMITS["kill_grace_s"])
                     audit.emit("STATE", app=name, phase="restart",
                                killed_pid_outcome=outcome)
                 popen, argv = start_service(audit, name, engine_info["binary"],
@@ -912,19 +1159,21 @@ def cmd_apply(args) -> int:
                                  "dedup_key": dedup_key(spec),
                                  "model_sha256": spec["model"]["sha256"],
                                  "engine_binary": engine_info["binary"],
+                                 "engine_sha256_16": engine_info["sha256_16"],
                                  "port": spec["service"]["port"],
                                  "health": spec["service"]["health"],
                                  "pid": popen.pid, "argv": argv})
                 if not wait_health(audit, name, spec["service"]["port"],
                                    spec["service"]["health"],
-                                   args.health_timeout):
+                                   args.health_timeout, proc=popen):
                     raise InstallError("health", "no HTTP 200 on %s within %ss"
                                        % (spec["service"]["health"],
                                           args.health_timeout), 4)
             else:
                 # dedup_ready: a healthy service is already running — keep it
-                # exactly as it is (no second process on the same port); the
-                # ready marker below retains the existing pid.
+                # exactly as it is (no second process on the same port). The
+                # ready marker below keeps the recorded pid but writes THIS
+                # run's self-consistent facts (no drift ⇔ they coincide).
                 if not wait_health(audit, name, spec["service"]["port"],
                                    spec["service"]["health"],
                                    min(args.health_timeout, 30.0)):
@@ -934,13 +1183,13 @@ def cmd_apply(args) -> int:
         else:  # fresh | resume
             if action == "resume":
                 audit.emit("DEDUP", app=name, key=dedup_key(spec), why=why)
-            target = model_target(p, spec)
             if action == "resume" and os.path.isfile(target):
                 os.remove(target)
             write_marker(p, {"app": name, "state": "installing",
                              "dedup_key": dedup_key(spec),
                              "model_sha256": spec["model"]["sha256"],
                              "engine_binary": engine_info["binary"],
+                             "engine_sha256_16": engine_info["sha256_16"],
                              "port": spec["service"]["port"],
                              "health": spec["service"]["health"]})
             urls = build_mirror_urls(spec["model"]["mirror_urls"],
@@ -948,13 +1197,14 @@ def cmd_apply(args) -> int:
             if not urls:
                 raise InstallError("download", "appspec has no mirror_urls and "
                                    "no verified local copy", 3)
-            part = os.path.join(p["downloads"],
-                                "%s-%s.part" % (name, spec["model"]["sha256"][:12]))
+            part = os.path.join(p["downloads"], "%s-%s-%d.part"
+                                % (name, spec["model"]["sha256"][:12],
+                                   os.getpid()))
             got, size = download_model(audit, name, urls, part,
                                        spec["model"]["sha256"])
             audit.emit("VERIFY_OK", app=name, what="model", sha256=got,
                        bytes=size)
-            os.makedirs(p["models"], exist_ok=True)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
             os.replace(part, target)           # atomic within the sandbox fs
             audit.emit("PLACE", app=name, path=target, bytes=size)
             popen, argv = start_service(audit, name, engine_info["binary"],
@@ -963,16 +1213,24 @@ def cmd_apply(args) -> int:
                              "dedup_key": dedup_key(spec),
                              "model_sha256": got,
                              "engine_binary": engine_info["binary"],
+                             "engine_sha256_16": engine_info["sha256_16"],
                              "port": spec["service"]["port"],
                              "health": spec["service"]["health"],
                              "pid": popen.pid, "argv": argv})
             if not wait_health(audit, name, spec["service"]["port"],
-                               spec["service"]["health"], args.health_timeout):
+                               spec["service"]["health"], args.health_timeout,
+                               proc=popen):
                 raise InstallError("health", "no HTTP 200 on %s within %ss"
                                    % (spec["service"]["health"],
                                       args.health_timeout), 4)
 
-        # --- ready: marker, mandatory probe/1 refresh, READY --------------- #
+        # --- ready: re-verify the placed bytes (a concurrent writer or a
+        # lost race must never reach READY), then marker, probe, READY ----- #
+        final_state, final_missing = install_state_of(spec, p, engine_info, None)
+        if final_state != "ready":
+            raise InstallError("verify",
+                               "VERIFY_FAIL: post-placement re-verify failed "
+                               "(%s)" % "; ".join(final_missing), 3)
         write_marker(p, {"app": name, "state": "ready",
                          "dedup_key": dedup_key(spec),
                          "model_sha256": spec["model"]["sha256"],
@@ -984,8 +1242,6 @@ def cmd_apply(args) -> int:
                          "argv": argv,
                          "install_dir": p["app"]})
         probe_refresh(audit, name, args.appspec, p)
-        final_state, final_missing = install_state_of(
-            spec, p, engine_info, None, skip_model_hash=True)
         audit.emit("READY", app=name, port=spec["service"]["port"],
                    install_dir=p["app"],
                    dedup=(action in ("dedup_ready", "restart")),
@@ -995,23 +1251,40 @@ def cmd_apply(args) -> int:
                    engine_binary=engine_info["binary"])
         now_note("READY: %s on port %d (%s)" % (name, spec["service"]["port"], action))
         popen = None                       # the running service is the product
-        return 0
+        return finish(0)
 
     except InstallError as e:
         audit.emit("INSTALL_FAIL", app=name, step=e.step, error=e.reason,
                    exit_code=e.code)
         now_note("FAIL at %s: %s" % (e.step, e.reason))
         code = e.code
-        if e.step not in ("read", "schema") and spec is not None and p is not None:
+        # "lock" holds no lock and mutated nothing — never roll back another
+        # install's live state just because we lost the race for it.
+        if e.step not in ("read", "schema", "lock") \
+                and spec is not None and p is not None:
             if not rollback(audit, p, name, "failed:%s" % e.step, popen=popen):
                 code = 5                   # rollback itself left something behind
-        return code
+        return finish(code)
+    except OSError as e:
+        # Bare OSError (ENOSPC, EACCES, ENOENT on a model.file sub-directory…)
+        # must reach the same fail-closed path as InstallError: whatever was
+        # placed or started is rolled back (a service started before the
+        # failing write dies with it), exit 3 — 5 if the rollback leaks.
+        ie = InstallError("io", "%s: %s" % (type(e).__name__, str(e)[:200]), 3)
+        audit.emit("INSTALL_FAIL", app=name, step=ie.step, error=ie.reason,
+                   exit_code=ie.code)
+        now_note("FAIL at %s: %s" % (ie.step, ie.reason))
+        code = ie.code
+        if spec is not None and p is not None:
+            if not rollback(audit, p, name, "failed:%s" % ie.step, popen=popen):
+                code = 5
+        return finish(code)
     except KeyboardInterrupt:
         if spec is not None and p is not None:
             rollback(audit, p, name, "interrupted", popen=popen)
-        return 4
+        return finish(4)
     finally:
-        audit.close()
+        release_app_lock(lock_fd)
 
 
 # --------------------------------------------------------------------------- #
@@ -1026,6 +1299,24 @@ def cmd_rollback(args) -> int:
         return 2
     p = sandbox_paths(sandbox, name)
     audit = Audit(args.audit_path or os.path.join(sandbox, AUDIT_NAME))
+    if not audit.usable:               # fail-closed: no audit trail, no change
+        now_note("refusing to roll back: audit file unavailable (fail-closed)")
+        audit.close()
+        return 2
+    try:
+        lock_fd = acquire_app_lock(p)
+    except OSError as e:
+        audit.emit("ROLLBACK", app=name, reason=args.reason,
+                   error="app lock unusable: %s" % e, exit_code=6)
+        now_note("FAIL: app lock unusable: %s" % e)
+        audit.close()
+        return 6
+    if lock_fd is None:
+        audit.emit("ROLLBACK", app=name, reason=args.reason,
+                   error="another install in progress", exit_code=6)
+        now_note("another install is in progress for %r" % name)
+        audit.close()
+        return 6
     try:
         if read_marker(p) is None and not os.path.isdir(p["app"]):
             audit.emit("ROLLBACK", app=name, reason=args.reason,
@@ -1034,6 +1325,7 @@ def cmd_rollback(args) -> int:
             return 0
         return 0 if rollback(audit, p, name, args.reason) else 5
     finally:
+        release_app_lock(lock_fd)
         audit.close()
 
 
@@ -1043,7 +1335,10 @@ def cmd_status(args) -> int:
     if args.name:
         names = [args.name]
     else:
-        names = sorted(os.listdir(apps_root)) if os.path.isdir(apps_root) else []
+        # <name>.lock files are mutexes, not apps — never report them
+        names = sorted(f for f in os.listdir(apps_root)
+                       if not f.endswith(".lock")) \
+            if os.path.isdir(apps_root) else []
     out = {"sandbox": sandbox, "apps": []}
     for name in names:
         p = sandbox_paths(sandbox, name)
@@ -1070,7 +1365,8 @@ def cmd_status(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# selftest — pure functions only (no network, no sandbox writes)
+# selftest — pure functions (no network, no sandbox writes; one throwaway
+# tempdir exercises the audit fail-closed path)
 # --------------------------------------------------------------------------- #
 
 def cmd_selftest(_args) -> int:
@@ -1186,6 +1482,101 @@ def cmd_selftest(_args) -> int:
           not path_inside("/sb/apps", "/sb/apps-x")
           and not path_inside("/sb/apps", "/etc")
           and path_inside("/sb/apps", "/sb/apps/n/../n/m.gguf"))
+
+    # --- pid facts: zombie ≠ alive (fix 5); exact-argv kill gate (fix 6) --- #
+    check("proc.stat_state.comm_with_parens",
+          _stat_state("1234 (my (weird) proc) S 1 2") == "S")
+    check("proc.stat_state.zombie", _stat_state("42 (x) Z 1 2") == "Z")
+    check("proc.stat_state.garbage", _stat_state("no parens") is None
+          and _stat_state("") is None)
+    check("proc.pid_alive.self", pid_alive(os.getpid()) is True)
+    check("proc.pid_alive.no_such_pid", pid_alive(2 ** 31 - 1) is False)
+    check("proc.parse_cmdline",
+          parse_cmdline(b"tail\x00-f\x00app.log\x00")
+          == ["tail", "-f", "app.log"]
+          and parse_cmdline(b"a\x00b") == ["a", "b"]          # tolerant
+          and parse_cmdline(b"") == [])
+    check("proc.stop_process.skips_unverified_argv",
+          stop_process(os.getpid(), verify_argv=["definitely", "not", "us"],
+                       grace=0) == "skipped_unverified")
+    check("proc.stop_process.already_dead",
+          stop_process(2 ** 31 - 1, verify_argv=None, grace=0)
+          == "already_dead")
+    check("proc.argv_matches.exact",
+          argv_matches(["/opt/e/server", "-m", "x"], ["/opt/e/server", "-m", "x"]))
+    check("proc.argv_matches.shebang_interp_prefix",
+          argv_matches(["python3", "/opt/e/server", "-m", "x"],
+                       ["/opt/e/server", "-m", "x"]))
+    check("proc.argv_matches.rejects_substring_shapes",
+          not argv_matches(["tail", "-f", "/sb/apps/a/service.log"],
+                           ["/sb/apps/a"])
+          and not argv_matches(["/opt/e/server", "-m", "OTHER"],
+                               ["/opt/e/server", "-m", "x"])
+          and not argv_matches([], ["/x"])
+          and not argv_matches(["python3"], ["/x"]))
+
+    # --- deployment facts: dedup decision is facts-complete (fix 7) -------- #
+    eng_bin = "/opt/llama/bin/llama-server"
+    facts = deployment_facts(good, eng_bin, "a" * 16, "/sb/m.gguf", "/sb/app")
+    check("facts.complete",
+          facts["port"] == 18010 and facts["health"] == "/health"
+          and facts["engine_binary"] == eng_bin
+          and facts["engine_sha256_16"] == "a" * 16
+          and facts["argv"] == [eng_bin, "-m", "/sb/m.gguf", "--port", "18010"],
+          str(facts))
+    mfull = {"schema": MARKER_SCHEMA, "app": "x", "state": "ready",
+             "model_sha256": S, "pid": 4242, **facts}
+    check("facts.no_drift_dedup_ready",
+          decide_resume(mfull, good, True, True, facts=facts)[0]
+          == "dedup_ready")
+    check("facts.no_drift_restart_when_down",
+          decide_resume(mfull, good, True, False, facts=facts)[0] == "restart")
+    for k, v in (("port", 19999), ("health", "/live"), ("argv", ["other"]),
+                 ("engine_binary", "/other/engine"),
+                 ("engine_sha256_16", "f" * 16)):
+        drifted = dict(mfull)
+        drifted[k] = v
+        action, why = decide_resume(drifted, good, True, True, facts=facts)
+        check("facts.drift_%s_restarts" % k, action == "restart" and k in why,
+              "%s/%s" % (action, why))
+
+    # --- download budget: known size extends the fixed floor (fix 10) ------ #
+    check("download.budget_floor",
+          attempt_budget(None) == float(LIMITS["download_attempt_deadline_s"]))
+    cap = LIMITS["model_max_bytes"]
+    check("download.budget_extends",
+          attempt_budget(cap) == max(float(LIMITS["download_attempt_deadline_s"]),
+                                     cap / LIMITS["download_min_bytes_per_s"]))
+    check("download.stall_budget_present",
+          LIMITS["download_stall_timeout_s"] == 120)
+
+    # --- redirect policy: never downgrade https → http (fix 9) ------------- #
+    rh = NoDowngradeRedirectHandler()
+    check("redirect.refuses_downgrade",
+          rh.redirect_request(urllib.request.Request("https://a.example/b"),
+                              None, 302, "found", {},
+                              "http://a.example/b") is None)
+    r2 = rh.redirect_request(urllib.request.Request("http://a.example/b"),
+                             None, 302, "found", {}, "http://a.example/c")
+    check("redirect.allows_plain_http",
+          isinstance(r2, urllib.request.Request)
+          and r2.full_url == "http://a.example/c")
+    r3 = rh.redirect_request(urllib.request.Request("https://a.example/b"),
+                             None, 302, "found", {}, "https://a.example/c")
+    check("redirect.allows_https_to_https",
+          isinstance(r3, urllib.request.Request))
+
+    # --- audit: fail-closed when unavailable, lost-count at close (fix 8) -- #
+    with tempfile.TemporaryDirectory(prefix="bicameral-selftest-") as td:
+        a = Audit(os.path.join(td, "audit.jsonl"))
+        ok = a.usable
+        a.emit("T", x=1)
+        check("audit.roundtrip", ok and a.close() == 0)
+        blocker = os.path.join(td, "blocker")
+        open(blocker, "w").close()
+        b = Audit(os.path.join(blocker, "nested", "audit.jsonl"))
+        check("audit.unavailable_fails_closed",
+              not b.usable and b.lost > 0 and b.close() > 0)
 
     # shipped examples must validate (the bad sha is a runtime VERIFY_FAIL,
     # not a schema error — schema sees 64 hex and accepts)

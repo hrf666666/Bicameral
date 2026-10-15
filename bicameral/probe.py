@@ -73,6 +73,7 @@ import urllib.request
 SCHEMA = "probe/1"
 EXCERPT = 600            # max chars of any captured tool output kept verbatim
 LINE_CUT = 200           # max chars of any single captured line
+CAPTURE_FULL_CAP = 256 * 1024  # raw-output cap in run_cmd capture_full mode
 MAX_MODEL_ENTRIES = 400  # cap inventory entries kept in the report
 MAX_WALK_DEPTH = 6
 SUBPROC_TIMEOUT = 12     # seconds for --version / smi invocations
@@ -193,17 +194,32 @@ def human_bytes(n: int | None) -> str | None:
 
 
 def run_cmd(argv: list[str], timeout: int = SUBPROC_TIMEOUT,
-            ld_prepend: list[str] | None = None) -> dict:
-    """Run a read-only command; never raise. status ∈ ok|nonzero|absent|timeout|error."""
+            ld_prepend: list[str] | None = None,
+            capture_full: bool = False) -> dict:
+    """Run a read-only command; never raise. status ∈ ok|nonzero|absent|timeout|error.
+
+    Default mode keeps only the clipped excerpt ("output") — report evidence.
+    capture_full=True additionally returns "full_output": raw stdout+stderr up
+    to CAPTURE_FULL_CAP chars, for commands whose output must be *parsed*
+    (ss -tln — the 600-char excerpt silently dropped listening ports).
+    "truncated" flags a cap hit so the consuming section can say so.
+    """
     env = dict(os.environ)
     if ld_prepend:
         base = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = ":".join(ld_prepend + ([base] if base else []))
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
-        out = clip_lines((p.stdout or "") + ("\n" + p.stderr if p.stderr else ""))
-        return {"status": "ok" if p.returncode == 0 else "nonzero",
-                "code": p.returncode, "output": out}
+        # errors="replace": binary / non-UTF-8 tool output is a fact to record,
+        # never a UnicodeDecodeError that kills the whole report.
+        p = subprocess.run(argv, capture_output=True, text=True, errors="replace",
+                           timeout=timeout, env=env)
+        merged = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+        out: dict = {"status": "ok" if p.returncode == 0 else "nonzero",
+                     "code": p.returncode, "output": clip_lines(merged)}
+        if capture_full:
+            out["full_output"] = merged[:CAPTURE_FULL_CAP]
+            out["truncated"] = len(merged) > CAPTURE_FULL_CAP
+        return out
     except FileNotFoundError:
         return {"status": "absent", "error": f"executable not found: {argv[0]}"}
     except PermissionError:
@@ -211,8 +227,12 @@ def run_cmd(argv: list[str], timeout: int = SUBPROC_TIMEOUT,
     except subprocess.TimeoutExpired as e:
         # keep partial output: streaming tools (tegrastats) are evidence, not errors
         partial = b"".join(x for x in (e.stdout, e.stderr) if x).decode("utf-8", "replace")
-        return {"status": "timeout", "error": f"timeout after {timeout}s (streaming tool?)",
-                "output": clip_lines(partial)}
+        res = {"status": "timeout", "error": f"timeout after {timeout}s (streaming tool?)",
+               "output": clip_lines(partial)}
+        if capture_full:
+            res["full_output"] = partial[:CAPTURE_FULL_CAP]
+            res["truncated"] = len(partial) > CAPTURE_FULL_CAP
+        return res
     except OSError as e:
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
@@ -322,13 +342,20 @@ def probe_one_tool(tool: str, vendor: str, roots: list[str] | None,
         entry["ld_library_path_prepend"] = libs
     entry["run"] = run_cmd([path], timeout=timeout,
                            ld_prepend=libs if inject_ld else None)
-    # Best-effort structured query (nvidia-smi / ixsmi style); harmless if the
-    # tool doesn't speak this dialect — recorded, never fatal.
-    q = run_cmd([path, "--query-gpu=name,driver_version,compute_cap,memory.total",
-                 "--format=csv,noheader"], timeout=timeout,
-                ld_prepend=libs if inject_ld else None)
-    if q["status"] == "ok" and q.get("output") and "invalid" not in q["output"].lower():
-        entry["gpu_query_csv"] = q["output"]
+    # Best-effort structured query (nvidia-smi / ixsmi dialect); harmless if
+    # the tool doesn't speak this dialect — recorded, never fatal. Field set
+    # carries a fallback chain (bi150 lesson: ixsmi rejects compute_cap, which
+    # used to discard the whole row) and acceptance is structural — a CSV
+    # header row — never a keyword blacklist (which let jetson_clocks' usage
+    # text pass as data on the 2026-10-14 bench).
+    for fields in ("name,driver_version,compute_cap,memory.total",
+                   "name,driver_version,memory.total"):
+        q = run_cmd([path, f"--query-gpu={fields}", "--format=csv"],
+                    timeout=timeout, ld_prepend=libs if inject_ld else None)
+        if q["status"] == "ok" and looks_like_gpu_csv(q.get("output")):
+            entry["gpu_query_csv"] = q["output"]
+            entry["gpu_query_fields"] = fields
+            break
     return entry
 
 
@@ -463,9 +490,15 @@ def probe_cuda() -> dict:
     if not nvcc and os.path.isfile("/usr/local/cuda/bin/nvcc"):
         nvcc, source = "/usr/local/cuda/bin/nvcc", "/usr/local/cuda/bin"
     if not nvcc:
-        for cand in sorted(glob.glob("/usr/local/cuda-*/bin/nvcc"), reverse=True):
-            nvcc, source = cand, os.path.dirname(cand)
-            break
+        # numeric (major, minor) ordering: lexicographic sort would rank
+        # /usr/local/cuda-9.0 above /usr/local/cuda-10.2
+        def cuda_key(p: str) -> tuple[int, int]:
+            m = re.search(r"cuda-(\d+)(?:\.(\d+))?", p)
+            return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
+        cands = glob.glob("/usr/local/cuda-*/bin/nvcc")
+        if cands:
+            nvcc = max(cands, key=cuda_key)
+            source = os.path.dirname(nvcc)
     if not nvcc:
         # version-file fallbacks (nvcc-less runtime installs)
         for pat in ("/usr/local/cuda/version.json", "/usr/local/cuda/version.txt",
@@ -505,11 +538,64 @@ def read_version_file(patterns: list[str], regex: str | None = None) -> dict:
     return {"status": "absent", "searched": patterns}
 
 
+COREX_RUN_VERSION_RE = re.compile(r"(?:CoreX|IX-ML)\s*Version:\s*(\S+)", re.I)
+
+
+def probe_corex(vendor_tools: list[dict] | None) -> dict:
+    """CoreX version: plain version files, then release-corex.txt (which the
+    plain reader's first-line heuristic mis-reads), then the banner printed by
+    the vendor tool itself (ixsmi run output) as last resort."""
+    r = read_version_file(["/usr/local/corex*/version", "/usr/local/corex*/version.*"])
+    if r.get("status") == "present":
+        return r
+    r2 = read_version_file(["/usr/local/corex*/release-corex.txt"],
+                           regex=r"(?:CoreX|IX-ML)\s*Version:\s*(\S+)")
+    if r2.get("status") == "present":
+        return r2
+    for t in vendor_tools or []:
+        m = COREX_RUN_VERSION_RE.search((t.get("run") or {}).get("output") or "")
+        if m:
+            return {"status": "present", "version": m.group(1),
+                    "source": f"{t.get('tool')} run output"}
+    return {**r, "searched": list(r.get("searched", [])) + list(r2.get("searched", []))}
+
+
+def looks_like_gpu_csv(text: str | None) -> bool:
+    """Structural acceptance for --query-gpu output: the header row must start
+    with "name," and carry >= 3 columns. Usage/error banners (tegrastats,
+    jetson_clocks) have no such header and are rejected without any keyword
+    blacklist."""
+    if not text or not text.strip():
+        return False
+    first = text.strip().splitlines()[0].strip()
+    return first.lower().startswith("name,") and len(first.split(",")) >= 3
+
+
 def parse_smi_csv(csv: str | None) -> dict | None:
-    """Parse `--query-gpu=name,driver_version,compute_cap,memory.total` CSV."""
-    if not csv:
+    """Parse `--query-gpu=... --format=csv` output (header + first data row);
+    also tolerates the historical noheader layout name,driver,compute_cap,…"""
+    if not csv or not csv.splitlines():
         return None
-    row = [c.strip() for c in csv.splitlines()[0].split(",")] if csv.splitlines() else []
+    lines = [ln for ln in csv.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    header = [c.strip().lower() for c in lines[0].split(",")]
+    if header[0] == "name" and len(header) >= 3:
+        if len(lines) < 2:
+            return None
+        row = [c.strip() for c in lines[1].split(",")]
+
+        def col(key: str) -> str | None:
+            for i, h in enumerate(header):
+                if h.split()[0] == key and i < len(row):
+                    return row[i]
+            return None
+
+        return {"name": row[0] if row else None,
+                "driver_version": col("driver_version"),
+                "compute_cap": col("compute_cap"),
+                "memory_total": col("memory.total")}
+    row = [c.strip() for c in lines[0].split(",")]
     if len(row) < 3:
         return None
     return {"name": row[0], "driver_version": row[1], "compute_cap": row[2],
@@ -557,7 +643,8 @@ def probe_egress(skip: bool) -> dict:
     return {"targets": results, "summary": summary}
 
 
-def probe_stack(accel: list[dict], skip_egress: bool) -> dict:
+def probe_stack(accel: list[dict], skip_egress: bool,
+                vendor_tools: list[dict] | None = None) -> dict:
     st: dict = {"os": parse_os_release(), "kernel": platform.release(),
                 "container": container_markers()}
 
@@ -580,7 +667,7 @@ def probe_stack(accel: list[dict], skip_egress: bool) -> dict:
              "/usr/local/[Aa]scend/nnal/atb/latest/version.cfg",
              "/usr/local/[Aa]scend/aascend-toolkit/latest/version.cfg"],
             regex=r"version\s*=\s*(\S+)"),
-        "corex": read_version_file(["/usr/local/corex*/version", "/usr/local/corex*/version.*"]),
+        "corex": probe_corex(vendor_tools),
     }
 
     st["python"] = {
@@ -701,17 +788,35 @@ def scan_models(cli_dirs: list[str]) -> dict:
             "models": entries}
 
 
-def http_get_local(port: int, path: str) -> dict:
-    url = f"http://127.0.0.1:{port}{path}"
-    try:
+def http_get_local(port: int, path: str,
+                   addrs: list[str] | None = None) -> dict:
+    """GET http://<loopback>:<port><path>; never raises. Tries 127.0.0.1 and,
+    when ss reported a wildcard IPv6 listener ("[::…"), ::1 as well — a v6-only
+    listener is otherwise invisible to the v4-only probe. The full body read
+    (up to 4096 bytes) travels in "body" for parsing; only "body_excerpt" is
+    clipped for the report."""
+    hosts = ["127.0.0.1"]
+    if any((a or "").startswith("[::") for a in (addrs or [])):
+        hosts.append("::1")
+    last: dict = {"http_status": None, "host": hosts[0], "error": "no attempt made"}
+    for host in hosts:
+        bracket = f"[{host}]" if ":" in host else host
+        url = f"http://{bracket}:{port}{path}"
         req = urllib.request.Request(url, headers={"User-Agent": "bicameral-probe/1"})
-        with urllib.request.urlopen(req, timeout=LOCAL_HTTP_TIMEOUT) as r:
-            body = r.read(4096).decode("utf-8", "replace")
-            return {"http_status": r.status, "body_excerpt": clip(body, 300)}
-    except urllib.error.HTTPError as e:
-        return {"http_status": e.code, "error": "endpoint answered with HTTP error"}
-    except Exception as e:  # noqa: BLE001 — non-HTTP listeners are a fact
-        return {"http_status": None, "error": f"{type(e).__name__}: {e}"[:160]}
+        try:
+            with urllib.request.urlopen(req, timeout=LOCAL_HTTP_TIMEOUT) as r:
+                body = r.read(4096).decode("utf-8", "replace")
+                return {"http_status": r.status, "host": host,
+                        "body": body, "body_excerpt": clip(body, 300)}
+        except urllib.error.HTTPError as e:
+            # an HTTP answer proves the endpoint speaks HTTP on this loopback;
+            # no need to retry ::1
+            return {"http_status": e.code, "host": host,
+                    "error": "endpoint answered with HTTP error"}
+        except Exception as e:  # noqa: BLE001 — non-HTTP listeners are a fact
+            last = {"http_status": None, "host": host,
+                    "error": f"{type(e).__name__}: {e}"[:160]}
+    return last
 
 
 def parse_ss_tln(out: str) -> dict[int, list[str]]:
@@ -730,17 +835,20 @@ def parse_ss_tln(out: str) -> dict[int, list[str]]:
     return ports
 
 
-def probe_services() -> dict:
-    r = run_cmd(["ss", "-tln"])
+def probe_services(extra_health_paths: list[str] | None = None) -> dict:
+    r = run_cmd(["ss", "-tln"], capture_full=True)
     method = "ss -tln"
+    truncated = bool(r.get("truncated"))
     listeners: dict[int, list[str]] = {}
-    if r["status"] in ("ok", "nonzero") and r.get("output"):
-        listeners = parse_ss_tln(r["output"])
+    if r["status"] in ("ok", "nonzero") and r.get("full_output"):
+        # parse the FULL capture: the 600-char excerpt silently dropped ports
+        listeners = parse_ss_tln(r["full_output"])
     else:
-        r2 = run_cmd(["netstat", "-tln"])
-        if r2["status"] in ("ok", "nonzero") and r2.get("output"):
+        r2 = run_cmd(["netstat", "-tln"], capture_full=True)
+        truncated = truncated or bool(r2.get("truncated"))
+        if r2["status"] in ("ok", "nonzero") and r2.get("full_output"):
             method = "netstat -tln (ss unavailable)"
-            for line in r2["output"].splitlines()[2:]:
+            for line in r2["full_output"].splitlines()[2:]:
                 toks = line.split()
                 if len(toks) >= 6 and toks[-1] == "LISTEN":
                     addr, _, port = toks[3].rpartition(":")
@@ -750,28 +858,43 @@ def probe_services() -> dict:
                             ports.append(addr)
         else:
             return {"tool": "ss", "status": r["status"], "error": r.get("error"),
+                    "truncated": truncated,
                     "note": "neither ss nor netstat available; listening services unknown"}
+    # appspec-declared health paths (item: appspec.service.health honoured),
+    # probed per listener alongside the generic /health + /v1/models pair
+    extras = sorted({p if p.startswith("/") else "/" + p
+                     for p in (extra_health_paths or []) if p} - {"/health"})
 
     def probe_port(port: int, addrs: list[str]) -> dict:
-        health = http_get_local(port, "/health")
-        models_raw = http_get_local(port, "/v1/models")
+        health = http_get_local(port, "/health", addrs)
+        models_raw = http_get_local(port, "/v1/models", addrs)
         model_ids: list[str] = []
+        # parse the full body read (4096B), not its 300-char excerpt —
+        # the excerpt cut mid-JSON and model_ids came out empty every time
         try:
-            j = json.loads((models_raw.get("body_excerpt") or "").split("\ufffd")[0] or "null")
+            j = json.loads((models_raw.get("body") or "").split("\ufffd")[0] or "null")
             data = j.get("data") if isinstance(j, dict) else None
             if isinstance(data, list):
                 model_ids = [str(m.get("id")) for m in data[:32]
                              if isinstance(m, dict) and m.get("id")]
         except (ValueError, AttributeError):
             pass
+        health_probes: dict[str, dict] = {}
+        for pth in extras:
+            rp = http_get_local(port, pth, addrs)
+            health_probes[pth] = {"http_status": rp.get("http_status"),
+                                  "host": rp.get("host"), "error": rp.get("error")}
         healthy = health.get("http_status") == 200
         served = bool(model_ids)
-        health_rec = {"http_status": health.get("http_status"), "error": health.get("error")}
+        health_rec = {"http_status": health.get("http_status"),
+                      "host": health.get("host"), "error": health.get("error")}
         if healthy:
             health_rec["body_excerpt"] = health.get("body_excerpt")
         return {"port": port, "listen_addrs": addrs,
                 "health": health_rec,
+                "health_probes": health_probes,
                 "v1_models": {"http_status": models_raw.get("http_status"),
+                              "host": models_raw.get("host"),
                               "model_ids": model_ids,
                               "error": models_raw.get("error")},
                 "inference_server": bool(healthy or served)}
@@ -786,15 +909,17 @@ def probe_services() -> dict:
         probed.sort(key=lambda s: s["port"])
     inference = [s for s in probed if s["inference_server"]]
     return {"tool": method, "listener_count": len(listeners),
+            "truncated": truncated,
             "listeners": [{"port": p, "addrs": a} for p, a in sorted(listeners.items())],
             "cross_check": probed,
             "inference_services": inference,
             "note": "each listening port cross-checked with GET /health and GET /v1/models (§3.1 #3)"}
 
 
-def probe_installed(cli_model_dirs: list[str]) -> dict:
+def probe_installed(cli_model_dirs: list[str],
+                    extra_health_paths: list[str] | None = None) -> dict:
     return {"engines": probe_engines(), "models": scan_models(cli_model_dirs),
-            "services": probe_services()}
+            "services": probe_services(extra_health_paths)}
 
 
 # ------------------------------------------------------------ install_state
@@ -822,18 +947,32 @@ def eval_appspec(spec: dict, engines: list[dict], services: dict,
     model_present = False
     if not model_file:
         missing.append("appspec has no model.file to check")
+    elif not isinstance(model_file, str):
+        missing.append(f"appspec model.file is not a path string: {model_file!r}")
     elif os.path.isabs(model_file) and os.path.isfile(model_file):
         model_present = True
-        want = model.get("size_bytes")
-        if want and os.path.getsize(model_file) != int(want):
+        want_raw = model.get("size_bytes")
+        want = None
+        if want_raw is not None:
+            try:
+                want = int(want_raw)
+            except (TypeError, ValueError):
+                missing.append(f"appspec model.size_bytes invalid: {want_raw!r}")
+        if want and os.path.getsize(model_file) != want:
             missing.append(f"model size mismatch at {model_file} "
                            f"(want {want}, have {os.path.getsize(model_file)})")
             model_present = False
         if model_present and verify_hashes and model.get("sha256"):
-            have = sha256_16(model_file)
-            if not model.get("sha256", "").startswith(have[:16]):
-                missing.append(f"model sha256 mismatch at {model_file}")
+            try:
+                have = sha256_16(model_file)
+            except OSError as e:
+                missing.append(f"model sha256 unreadable at {model_file}: "
+                               f"{type(e).__name__}: {e}")
                 model_present = False
+            else:
+                if not model.get("sha256", "").startswith(have[:16]):
+                    missing.append(f"model sha256 mismatch at {model_file}")
+                    model_present = False
         elif model_present and model.get("sha256"):
             missing.append("model sha256 provided but unverified (run probe with --verify-hashes)")
     else:
@@ -846,13 +985,32 @@ def eval_appspec(spec: dict, engines: list[dict], services: dict,
         else:
             missing.append(f"model file not found: {model_file}")
 
+    # service health: honour a declared appspec.service.health path (default
+    # /health). An unhealthy service is NOT counted into `missing` — engine +
+    # model ready with the service down is exactly `degraded` (§3.1 #4); the
+    # old code appended it to missing, making degraded unreachable.
     service_state = None
-    port = svc.get("port")
-    if port is not None:
-        hit = next((s for s in services.get("cross_check", []) if s["port"] == int(port)), None)
-        service_state = "healthy" if (hit and hit["inference_server"]) else "not_healthy"
-        if service_state != "healthy":
-            missing.append(f"service on port {port} not healthy (no 200 /health or /v1/models)")
+    health_path = svc.get("health")
+    if health_path is not None and not isinstance(health_path, str):
+        missing.append(f"appspec service.health is not a string: {health_path!r}")
+        health_path = None
+    health_path = (health_path if health_path else "/health")
+    if not health_path.startswith("/"):
+        health_path = "/" + health_path
+    port_raw = svc.get("port")
+    if port_raw is not None:
+        try:
+            port = int(port_raw)
+        except (TypeError, ValueError):
+            missing.append(f"appspec service.port invalid: {port_raw!r}")
+        else:
+            hit = next((s for s in services.get("cross_check", []) if s["port"] == port), None)
+            if health_path == "/health":
+                healthy = bool(hit and hit["inference_server"])
+            else:
+                rec = (hit.get("health_probes") or {}).get(health_path) if hit else None
+                healthy = bool(rec and rec.get("http_status") == 200)
+            service_state = "healthy" if healthy else "not_healthy"
 
     if missing:
         state = "partial" if (engine_present or model_present) else "absent"
@@ -862,7 +1020,7 @@ def eval_appspec(spec: dict, engines: list[dict], services: dict,
         state = "ready"
     return {"appspec": label, "state": state, "missing": missing,
             "engine_present": engine_present, "model_present": model_present,
-            "service_state": service_state,
+            "service_state": service_state, "service_health_path": health_path,
             "note": "states per §3.1 #4: absent/partial/ready/degraded; "
                     "partial must say what is missing"}
 
@@ -885,28 +1043,51 @@ def build_report(args: argparse.Namespace) -> dict:
     if not machine_id:
         notes.append("/etc/machine-id unreadable; fingerprint lacks machine-id")
 
-    hardware = probe_hardware()
-    stack = probe_stack(hardware.get("accelerators", []), args.no_egress)
-    installed = probe_installed(args.model_dirs)
-    engines = installed["engines"]
-    services = installed["services"]
-    models = installed["models"]
-
-    install_state: list[dict] = []
+    # appspecs load first: a declared service.health steers the services probe
+    appspecs: list[tuple[str, dict | None, str | None]] = []  # (label, spec, load_error)
     if args.appspec:
         for label, path in args.appspec:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     spec = json.load(f)
             except (OSError, ValueError) as e:
-                install_state.append({"appspec": label, "state": "absent",
-                                      "missing": [f"appspec unreadable/invalid: {e}"]})
+                appspecs.append((label, None, str(e)))
                 continue
-            install_state.append(eval_appspec(spec, engines, services, models,
-                                              args.verify_hashes, label))
+            appspecs.append((label, spec, None))
     else:
         notes.append("no --appspec supplied (standalone run): install_state is "
                      "defined against master-issued appspec/1, reported as []")
+
+    extra_health_paths: set[str] = set()
+    for _, spec, load_err in appspecs:
+        if load_err is not None or not isinstance(spec, dict):
+            continue
+        hp = (spec.get("service") or {}).get("health")
+        if isinstance(hp, str) and hp:
+            extra_health_paths.add(hp if hp.startswith("/") else "/" + hp)
+
+    hardware = probe_hardware()
+    stack = probe_stack(hardware.get("accelerators", []), args.no_egress,
+                        hardware.get("vendor_tools") or [])
+    installed = probe_installed(args.model_dirs, sorted(extra_health_paths))
+    engines = installed["engines"]
+    services = installed["services"]
+    models = installed["models"]
+
+    install_state: list[dict] = []
+    for label, spec, load_err in appspecs:
+        if load_err is not None:
+            install_state.append({"appspec": label, "state": "absent",
+                                  "missing": [f"appspec unreadable/invalid: {load_err}"]})
+            continue
+        try:
+            # per-appspec guard: one malformed spec must not kill the report
+            install_state.append(eval_appspec(spec, engines, services, models,
+                                              args.verify_hashes, label))
+        except Exception as e:  # noqa: BLE001 — recorded as a per-item error state
+            install_state.append({"appspec": label, "state": "absent",
+                                  "missing": [f"appspec evaluation failed: "
+                                              f"{type(e).__name__}: {e}"]})
 
     report = {
         "schema": SCHEMA,
