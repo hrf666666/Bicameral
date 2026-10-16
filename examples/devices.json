@@ -7,7 +7,9 @@
       "base": "/home/nvidia/code/Bicameral/bicameral/task.py",
       "agent": "http://127.0.0.1:18001",
       "control": "http://127.0.0.1:18000",
-      "exec": { "kind": "execute-local" },
+      "exec": {
+        "kind": "execute-local"
+      },
       "perf": "results/2026-10-14-probe-bench/perf-jetson.json",
       "audit_ref": "/tmp/bicameral/audit.jsonl",
       "health_url": "http://127.0.0.1:18100/healthz"
@@ -15,12 +17,33 @@
     {
       "name": "bi150",
       "transport": "ssh",
-      "ssh": { "user": "root", "host": "10.70.251.39", "port": 31451 },
+      "ssh": {
+        "user": "root",
+        "host": "10.70.251.39",
+        "port": 31451
+      },
       "base": "/root/bicameral/task.py",
       "agent": "http://127.0.0.1:18001",
-      "exec": { "kind": "execute-local" },
+      "exec": {
+        "kind": "execute-local"
+      },
       "perf": "results/2026-10-14-probe-bench/perf-bi150.json",
       "audit_ref": "/tmp/bicameral/audit.jsonl"
+    },
+    {
+      "name": "bi100",
+      "transport": "ssh",
+      "ssh": {
+        "user": "root",
+        "host": "10.70.250.26",
+        "port": 46026
+      },
+      "base": "/root/bicameral-fleet/task.py",
+      "agent": "http://127.0.0.1:18010",
+      "exec": {
+        "kind": "execute-local"
+      },
+      "perf": "results/2026-10-16-fleet/device-bi100.json"
     }
   ]
 }

@@ -1,6 +1,6 @@
 {
   "schema": "probe/1",
-  "generated_at": "2026-10-16T03:12:23Z",
+  "generated_at": "2026-10-16T09:39:00Z",
   "probe": {
     "path": "/tmp/bicameral-fleet/probe.py",
     "sha256_16": "a2ce9db92eff2fb7",
@@ -17,7 +17,7 @@
   },
   "hardware": {
     "host": {
-      "hostname": "ai-exp-zb2557126-bi150-pod-jacr-5d95566cf-9xv6l",
+      "hostname": "ai-exp-zb2557126-bi150-pod-jacr-5d95566cf-mbdv9",
       "arch": "x86_64",
       "cpu_model": "Intel(R) Xeon(R) Gold 6330 CPU @ 2.00GHz",
       "cpu_cores": 112,
@@ -128,7 +128,7 @@
         "run": {
           "status": "ok",
           "code": 0,
-          "output": "Timestamp    Fri Oct 16 11:12:17 2026\n+--------------------------------------------------------------------------------+\n|  IX-ML: 4.4.0            Driver Version: 4.4.0          CUDA Version: 10.2     |\n|----------------------------------+----------------------+----------------------|\n| GPU  Name                        | Bus-Id               | Clock-SM  Clock-Mem  |\n| Fan  Temp  Perf    Pwr:Usage/Cap |      Memory-Usage    | GPU-Util  Compute M. |\n|==================================+======================+======================|\n…"
+          "output": "Timestamp    Fri Oct 16 17:38:54 2026\n+--------------------------------------------------------------------------------+\n|  IX-ML: 4.4.0            Driver Version: 4.4.0          CUDA Version: 10.2     |\n|----------------------------------+----------------------+----------------------|\n| GPU  Name                        | Bus-Id               | Clock-SM  Clock-Mem  |\n| Fan  Temp  Perf    Pwr:Usage/Cap |      Memory-Usage    | GPU-Util  Compute M. |\n|==================================+======================+======================|\n…"
         },
         "gpu_query_csv": "name, driver_version, memory.total [MiB]\nIluvatar BI-V150, 4.4.0, 32768 MiB\nIluvatar BI-V150, 4.4.0, 32768 MiB\nIluvatar BI-V150, 4.4.0, 32768 MiB\nIluvatar BI-V150, 4.4.0, 32768 MiB\nIluvatar BI-V150, 4.4.0, 32768 MiB\nIluvatar BI-V150, 4.4.0, 32768 MiB\nIluvatar BI-V150, 4.4.0, 32768 MiB\nIluvatar BI-V150, 4.4.0, 32768 MiB",
         "gpu_query_fields": "name,driver_version,memory.total"
@@ -239,30 +239,30 @@
       "targets": {
         "github_ssh_443": {
           "status": "up",
-          "latency_ms": 71
-        },
-        "hf_mirror": {
-          "status": "up",
-          "http_status": 206,
-          "latency_ms": 356
+          "latency_ms": 73
         },
         "pypi": {
           "status": "up",
           "http_status": 206,
-          "latency_ms": 534
+          "latency_ms": 319
         },
         "github": {
-          "status": "down",
-          "error": "URLError: <urlopen error timed out>",
-          "latency_ms": 5197
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 342
+        },
+        "hf_mirror": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 1341
         },
         "hf": {
           "status": "down",
           "error": "URLError: <urlopen error [Errno 101] Network is unreachable>",
-          "latency_ms": 5200
+          "latency_ms": 5121
         }
       },
-      "summary": "pypi:up hf:down hf_mirror:up github:down github_ssh_443:up"
+      "summary": "pypi:up hf:down hf_mirror:up github:up github_ssh_443:up"
     }
   },
   "installed": {
@@ -318,7 +318,7 @@
         },
         {
           "path": "/root/.cache/huggingface/hub",
-          "exists": true,
+          "exists": false,
           "origin": "convention"
         },
         {
@@ -327,9 +327,7 @@
           "origin": "convention"
         }
       ],
-      "roots_scanned": [
-        "/root/.cache/huggingface/hub"
-      ],
+      "roots_scanned": [],
       "count": 0,
       "count_note": "complete",
       "truncated": false,

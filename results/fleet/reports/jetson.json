@@ -1,6 +1,6 @@
 {
   "schema": "probe/1",
-  "generated_at": "2026-10-16T03:12:17Z",
+  "generated_at": "2026-10-16T09:38:53Z",
   "probe": {
     "path": "/home/nvidia/code/Bicameral/bicameral/probe.py",
     "sha256_16": "a2ce9db92eff2fb7",
@@ -165,7 +165,7 @@
         "run": {
           "status": "ok",
           "code": 0,
-          "output": "Fri Oct 16 11:12:06 2026       \n+---------------------------------------------------------------------------------------+\n| NVIDIA-SMI 540.4.0                Driver Version: 540.4.0      CUDA Version: 12.6     |\n|-----------------------------------------+----------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |\n|                                         |                      |               MIG M. |\n…"
+          "output": "Fri Oct 16 17:38:43 2026       \n+---------------------------------------------------------------------------------------+\n| NVIDIA-SMI 540.4.0                Driver Version: 540.4.0      CUDA Version: 12.6     |\n|-----------------------------------------+----------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |\n|                                         |                      |               MIG M. |\n…"
         },
         "gpu_query_csv": "name, driver_version, compute_cap, memory.total [MiB]\nOrin (nvgpu), 540.4.0, 8.7, [N/A]",
         "gpu_query_fields": "name,driver_version,compute_cap,memory.total"
@@ -179,7 +179,7 @@
         "run": {
           "status": "timeout",
           "error": "timeout after 5s (streaming tool?)",
-          "output": "10-16-2026 11:12:07 RAM 5917/15655MB (lfb 253x4MB) SWAP 866/7828MB (cached 1MB) CPU [42%@1984,30%@1984,22%@1984,38%@1984,12%@1984,0%@1984,0%@1984,0%@1984] GR3D_FREQ 0% cv0@47.25C cpu@51.343C soc2@46.0\n10-16-2026 11:12:08 RAM 5917/15655MB (lfb 253x4MB) SWAP 866/7828MB (cached 1MB) CPU [73%@1984,0%@1984,10%@1984,0%@1984,7%@1984,44%@1984,0%@1984,1%@1984] GR3D_FREQ 0% cv0@47.312C cpu@51.281C soc2@46.03\n…"
+          "output": "10-16-2026 17:38:44 RAM 5950/15655MB (lfb 186x4MB) SWAP 865/7828MB (cached 1MB) CPU [7%@1984,65%@1984,8%@1984,7%@1984,0%@1984,33%@1984,0%@1984,0%@1984] GR3D_FREQ 0% cv0@47.593C cpu@51.5C soc2@45.968C \n10-16-2026 17:38:45 RAM 5950/15655MB (lfb 186x4MB) SWAP 865/7828MB (cached 1MB) CPU [13%@1984,64%@1984,8%@1984,3%@1984,1%@1984,33%@1984,1%@1984,0%@1984] GR3D_FREQ 0% cv0@47.593C cpu@51.562C soc2@46.03\n…"
         }
       },
       {
@@ -307,30 +307,30 @@
       "targets": {
         "github_ssh_443": {
           "status": "up",
-          "latency_ms": 100
+          "latency_ms": 91
         },
-        "hf_mirror": {
+        "github": {
           "status": "up",
           "http_status": 206,
-          "latency_ms": 457
+          "latency_ms": 473
         },
         "pypi": {
           "status": "up",
           "http_status": 206,
-          "latency_ms": 545
+          "latency_ms": 485
         },
-        "github": {
-          "status": "down",
-          "error": "URLError: <urlopen error timed out>",
-          "latency_ms": 5187
+        "hf_mirror": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 577
         },
         "hf": {
           "status": "down",
           "error": "URLError: <urlopen error [Errno 101] Network is unreachable>",
-          "latency_ms": 5216
+          "latency_ms": 5268
         }
       },
-      "summary": "pypi:up hf:down hf_mirror:up github:down github_ssh_443:up"
+      "summary": "pypi:up hf:down hf_mirror:up github:up github_ssh_443:up"
     }
   },
   "installed": {

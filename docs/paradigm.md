@@ -171,3 +171,13 @@
 | **powerbench.py 功耗采样** | 性能边界的「功耗未采样」缺口 | ixsmi `gpu.power.draw`（该机实测 `power.draw` 字段被拒——CoreX 4.4.0 怪癖再 +1）与 tegrastats 双格式解析；采样链在 bi150 实机验证（空闲 37–46W×8 出数正常）。**遗留**：27B 档功耗实测待 8960 服务恢复（本轮发现其再次下线——服务来去无常正是 degrade/install 存在的理由），error 记录已归档 |
 
 **能力清单刷新**：感知设备 ~95%（+常驻化拉模式）、安装程度 ~90%、部署安装 ~95%（+引擎级）、性能边界 ~70%（+功耗采样链，-27B 档待测）、能力边界不变（多引擎/NPU 生态实测仍开放）。
+
+
+### 9.1 第三台设备接入（2026-10-16 当日晚）
+
+**bi100**（Ubuntu 22.04、x86_64、128 核/503G、**2× 天数智芯 Iluvatar**、无工具链无 pip 的裸节点）接入：
+- probe/1 一次跑通：Iluvatar 卡识别、出网画像（pypi/hf-mirror/ssh-443 通、hf/github 直连断——与 bi150 同款不对称）、引擎全 absent、corex 用户态缺席（连 release-corex.txt 都如实 absent）；
+- fleet 三机 ONLINE（jetson local + bi150 ssh + bi100 ssh），registry 含 manifest 哈希；清单 schema fail-closed 拒绝了非 schema 字段；
+- 过程中 **bi150 pod 被平台重置**（authorized_keys/部署/构建全清）——`deploy.sh` 一条命令重供给 + 公钥重装，十 分钟内恢复 ONLINE：易逝设备的「一条命令重建」正是范式承诺；
+- 新事实：①探针的 github_ssh_443 "up" 只是 TCP 可达（pod 重置后无 GitHub 注册密钥，clone 被拒）——egress 探测测的是可达性不是授权；②llama.cpp 源码经 Jetson https 通道克隆后打包转送（跨机工件搬运链）；③bi150（glibc 2.39）构建的引擎在 bi100（glibc 2.35）的可移植性待验——引擎工件按发行版分发的结论留待下一轮实证。
+- 已知外观项：fleet check 表格的 age 列渲染自更新前的 registry 快照，磁盘数据本身新鲜正确。

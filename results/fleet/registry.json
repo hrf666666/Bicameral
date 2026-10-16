@@ -1,17 +1,22 @@
 {
   "devices": {
+    "bi100": {
+      "last_report_path": "/home/nvidia/code/Bicameral/results/fleet/reports/bi100.json",
+      "last_seen_ts": 1792143546.061,
+      "report_sha256_16": "f4a7524f3f37450b"
+    },
     "bi150": {
       "last_report_path": "/home/nvidia/code/Bicameral/results/fleet/reports/bi150.json",
-      "last_seen_ts": 1792120343.918,
-      "report_sha256_16": "d2d29568b02ced9d"
+      "last_seen_ts": 1792143540.418,
+      "report_sha256_16": "bce4e76db2e50bf6"
     },
     "jetson": {
       "last_report_path": "/home/nvidia/code/Bicameral/results/fleet/reports/jetson.json",
-      "last_seen_ts": 1792120337.221,
-      "report_sha256_16": "e6a19117f9fadcbd"
+      "last_seen_ts": 1792143533.814,
+      "report_sha256_16": "6bd4dd22033edd1d"
     }
   },
-  "manifest_sha256_16": "5301590b7098ba24",
+  "manifest_sha256_16": "6c4b227a0062c53c",
   "schema": "fleet-registry/1",
-  "updated_ts": 1792120343.918
+  "updated_ts": 1792143546.061
 }
