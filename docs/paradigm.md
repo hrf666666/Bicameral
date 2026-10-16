@@ -181,3 +181,10 @@
 - 过程中 **bi150 pod 被平台重置**（authorized_keys/部署/构建全清）——`deploy.sh` 一条命令重供给 + 公钥重装，十 分钟内恢复 ONLINE：易逝设备的「一条命令重建」正是范式承诺；
 - 新事实：①探针的 github_ssh_443 "up" 只是 TCP 可达（pod 重置后无 GitHub 注册密钥，clone 被拒）——egress 探测测的是可达性不是授权；②llama.cpp 源码经 Jetson https 通道克隆后打包转送（跨机工件搬运链）；③bi150（glibc 2.39）构建的引擎在 bi100（glibc 2.35）的可移植性待验——引擎工件按发行版分发的结论留待下一轮实证。
 - 已知外观项：fleet check 表格的 age 列渲染自更新前的 registry 快照，磁盘数据本身新鲜正确。
+
+### 9.2 bi100 引擎门（2026-10-16 当日晚，同日第二批）
+
+①的可移植性定论落地为 ② 的原生路径，第三设备完整门通过：
+- **跨发行版定论实测**：bi150（glibc 2.39）构建在 bi100（2.35）上 GLIBC_2.38/2.36 符号缺失——捆绑非 glibc 库无效，**引擎工件必须按目标发行版构建**（或源码构建）。该事实直接改写 engine.install 的工件分发约定：artifact 按 (arch, os-release) 分发。
+- **bi100 完整门 PASS**：apt 装工具链 34s → jammy 原生构建 93s（`-DCMAKE_BUILD_RPATH_USE_ORIGIN=ON` 自包含工件）→ 打包 → 本地 mirror → install.apply 全流程（引擎 6.9MB + 模型 639MB hf-mirror）→ absent→READY，/health+/v1/models 双证 + 真实推理 23.01 tok/s（-t 32）；引擎 sha 反例 ENGINE_VERIFY_FAIL → 回滚无残留；hf-mirror 间歇 429 被重试策略消化。证据：`results/2026-10-16-bi100-engine-gate/`。
+- 过程事实：hf-mirror 按客户端 IP 间歇 429（重试即过）；bi100 连 curl/ss 都没有——探针/安装器的 stdlib-only 约束在最小镜像上是必需品而非洁癖。

@@ -1,0 +1,42 @@
+{
+  "schema": "appspec/1",
+  "name": "qwen3-0.6b-q8_0-badeng",
+  "engine": {
+    "name": "llama.cpp",
+    "install": {
+      "mirror_urls": [
+        "http://127.0.0.1:18099/llama-jammy.tgz"
+      ],
+      "sha256": "fb78cff88e909fa3d73e5ed419043259fba8d13af36dd2108273c5cf7eae22dd",
+      "format": "tgz",
+      "strip_components": 0,
+      "binary_inside": "bin/llama-server"
+    }
+  },
+  "model": {
+    "repo": "Qwen/Qwen3-0.6B-GGUF",
+    "file": "Qwen3-0.6B-Q8_0.gguf",
+    "format": "gguf",
+    "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+    "mirror_urls": [
+      "https://hf-mirror.com",
+      "https://huggingface.co"
+    ]
+  },
+  "service": {
+    "port": 18010,
+    "health": "/health",
+    "args": [
+      "-m",
+      "{model}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "{port}",
+      "-c",
+      "2048",
+      "-t",
+      "32"
+    ]
+  }
+}
