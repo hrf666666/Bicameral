@@ -188,3 +188,19 @@
 - **跨发行版定论实测**：bi150（glibc 2.39）构建在 bi100（2.35）上 GLIBC_2.38/2.36 符号缺失——捆绑非 glibc 库无效，**引擎工件必须按目标发行版构建**（或源码构建）。该事实直接改写 engine.install 的工件分发约定：artifact 按 (arch, os-release) 分发。
 - **bi100 完整门 PASS**：apt 装工具链 34s → jammy 原生构建 93s（`-DCMAKE_BUILD_RPATH_USE_ORIGIN=ON` 自包含工件）→ 打包 → 本地 mirror → install.apply 全流程（引擎 6.9MB + 模型 639MB hf-mirror）→ absent→READY，/health+/v1/models 双证 + 真实推理 23.01 tok/s（-t 32）；引擎 sha 反例 ENGINE_VERIFY_FAIL → 回滚无残留；hf-mirror 间歇 429 被重试策略消化。证据：`results/2026-10-16-bi100-engine-gate/`。
 - 过程事实：hf-mirror 按客户端 IP 间歇 429（重试即过）；bi100 连 curl/ss 都没有——探针/安装器的 stdlib-only 约束在最小镜像上是必需品而非洁癖。
+
+
+---
+
+## 10. 自治层（2026-10-16，回应「四自做不到」的批评）
+
+批评成立：此前感知/诊断/适配每一步都靠人。`bicameral/nodeagent.py`（2,221 行，stdlib）把四自收编为节点上的显式机制：
+
+| 四自 | 机制 | 实证（bi100 裸节点→READY 全程零人工，206.7s→310.8s 含加固后重跑） |
+|---|---|---|
+| 自感知 | `sense`：探针+决策事实（os/glibc/工具链/包管理器/出网/引擎/端口） | 识别「无工具链裸节点」并驱动后续规划 |
+| 自诊断 | 显式诊断规则表 + `classify_error` 纯函数：错误特征→根因→处置（GLIBC 符号缺失→本机构建、缺工具链→包管理器自装、429→退避换 mirror、目录缺失→先建） | hf-mirror 429×2 → 有界退避 20s → 复跑成功；规则穷尽 → NA_ESCALATE 结构化报告 exit 3（首跑真实暴露规则分派漂移，按设计升级而非静默） |
+| 自适应 | 规则驱动的处置动作：apt 自装（包名白名单常量）、源码构建（RPATH $ORIGIN 自包含）、mirror 重排 | 工具链被移除后一条 bootstrap 自装 15.2s、本机构建 89.4s、READY |
+| 自检 | `selfcheck` 7 项（健康/模型表/真实推理/healthz/审计可写/D3 重放/D10 预算），FAIL 必带诊断建议；bootstrap 结果以 selfcheck 为准（ready / ready_degraded exit 4） | 7/7 PASS；注入死端口 → exit 4 + 逐项 FAIL+建议 |
+
+**自治的边界（同样显式）**：bootstrap 全程 flock 单实例；apt 包名与删除操作走常量白名单与 path_inside 门（root 永不删）；规则表覆盖有静态钉（逐规则 `action ==` 比较行 + 规划器反向断言）；源码通道强制 sha256 pin、clone 记 resolved commit；同规则双败无进展即升级。评审 1 HIGH + 4 MEDIUM + 3 LOW 全部修复，selftest 117 项 0 失败，bi100 正例（READY exit 0）与注入反例（exit 3/4）双验证。

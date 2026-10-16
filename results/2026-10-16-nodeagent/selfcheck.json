@@ -1,0 +1,82 @@
+{
+  "checks": [
+    {
+      "check": "base_health",
+      "status": "PASS",
+      "detail": {
+        "url": "http://127.0.0.1:18010/health",
+        "http_status": 200,
+        "body": {
+          "status": "ok"
+        }
+      },
+      "suggestion": null
+    },
+    {
+      "check": "base_models",
+      "status": "PASS",
+      "detail": {
+        "http_status": 200,
+        "models": [
+          "/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf"
+        ]
+      },
+      "suggestion": null
+    },
+    {
+      "check": "base_completion",
+      "status": "PASS",
+      "detail": {
+        "http_status": 200,
+        "content_excerpt": " Paris. The capital of France is also the capital of the Republic of France.",
+        "predicted_per_second": 33.356831367874705,
+        "error": null
+      },
+      "suggestion": null
+    },
+    {
+      "check": "agent_healthz",
+      "status": "PASS",
+      "detail": {
+        "http_status": 200,
+        "build_sha": "7cafc8cfac6f65f5",
+        "pol_ver": 1
+      },
+      "suggestion": null
+    },
+    {
+      "check": "agent_audit",
+      "status": "PASS",
+      "detail": {
+        "audit_before": 3,
+        "issue_status": 200,
+        "audit_after": 4
+      },
+      "suggestion": null
+    },
+    {
+      "check": "agent_nonce_replay",
+      "status": "PASS",
+      "detail": {
+        "invoke_plane": "http://127.0.0.1:18001",
+        "write": 200,
+        "read": 200,
+        "replay_status": 401,
+        "replay_reason": "D3/REPLAY_DETECTED",
+        "note": null
+      },
+      "suggestion": null
+    },
+    {
+      "check": "agent_budget",
+      "status": "PASS",
+      "detail": {
+        "status": 429,
+        "reason": "D10/BUDGET_EXHAUSTED",
+        "budget_spent": "fs.write + fs.read = 2/2 calls"
+      },
+      "suggestion": null
+    }
+  ],
+  "summary": "7 checks: 7 PASS, 0 FAIL, 0 SKIP"
+}

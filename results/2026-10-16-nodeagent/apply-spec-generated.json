@@ -1,0 +1,42 @@
+{
+  "schema": "appspec/1",
+  "name": "qwen3-0.6b-q8_0",
+  "engine": {
+    "name": "llama.cpp",
+    "install": {
+      "mirror_urls": [
+        "file:///root/bicameral-sandbox/nodeagent/artifacts/llama-ubuntu22.04-x86_64.tgz"
+      ],
+      "sha256": "aed446d7237b88c4fd9f428823aac5b56bc9f2e58ff43b599f38f8aba45a19cc",
+      "format": "tgz",
+      "strip_components": 0,
+      "binary_inside": "bin/llama-server"
+    }
+  },
+  "model": {
+    "repo": "Qwen/Qwen3-0.6B-GGUF",
+    "file": "Qwen3-0.6B-Q8_0.gguf",
+    "format": "gguf",
+    "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+    "mirror_urls": [
+      "https://hf-mirror.com",
+      "https://huggingface.co"
+    ]
+  },
+  "service": {
+    "port": 18010,
+    "health": "/health",
+    "args": [
+      "-m",
+      "{model}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "{port}",
+      "-c",
+      "2048",
+      "-t",
+      "32"
+    ]
+  }
+}

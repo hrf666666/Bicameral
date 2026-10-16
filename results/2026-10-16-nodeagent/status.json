@@ -1,0 +1,400 @@
+{
+  "state_file": "/root/bicameral-sandbox/nodeagent/nodeagent-state.json",
+  "exists": true,
+  "updated_at": "2026-10-16T10:37:23Z",
+  "last_sense": {
+    "schema": "nodeagent/1",
+    "generated_at": "2026-10-16T10:42:33Z",
+    "os_id": "ubuntu",
+    "os_version": "22.04",
+    "os_pretty": "Ubuntu 22.04.5 LTS",
+    "arch": "x86_64",
+    "glibc": "2.35",
+    "cores": 128,
+    "mem_gb": 503.8,
+    "toolchain": {
+      "gcc": {
+        "present": true,
+        "path": "/usr/bin/gcc",
+        "version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0"
+      },
+      "g++": {
+        "present": true,
+        "path": "/usr/bin/g++",
+        "version": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0"
+      },
+      "cmake": {
+        "present": true,
+        "path": "/usr/bin/cmake",
+        "version": "cmake version 3.22.1"
+      },
+      "make": {
+        "present": true,
+        "path": "/usr/bin/make",
+        "version": "GNU Make 4.3"
+      },
+      "git": {
+        "present": false,
+        "path": null,
+        "version": null
+      }
+    },
+    "pkg_mgr": {
+      "name": "apt",
+      "path": "/usr/bin/apt-get"
+    },
+    "egress": {
+      "pypi": "up",
+      "hf": "down",
+      "hf_mirror": "up",
+      "github_https": "down"
+    },
+    "engines": [
+      {
+        "name": "llama-server",
+        "status": "absent",
+        "version": null,
+        "sha256_16": null
+      },
+      {
+        "name": "vllm",
+        "status": "absent",
+        "version": null,
+        "sha256_16": null
+      },
+      {
+        "name": "strata",
+        "status": "absent",
+        "version": null,
+        "sha256_16": null
+      }
+    ],
+    "port_free": true,
+    "port": 18010
+  },
+  "bootstrap": {
+    "app": "qwen3-0.6b-q8_0",
+    "status": "ready",
+    "strategy": "source",
+    "rounds": 7,
+    "elapsed_s": 206.7,
+    "apply_attempts": 2,
+    "backoffs": 1,
+    "selfcheck_summary": "7 checks: 3 PASS, 0 FAIL, 4 SKIP",
+    "finished_at": "2026-10-16T10:43:19Z"
+  },
+  "last_selfcheck": "7 checks: 7 PASS, 0 FAIL, 0 SKIP",
+  "diagnose_history_tail": [
+    {
+      "round": 10,
+      "ts": "2026-10-16T10:37:13Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": "unknown action pkg_install_toolchain",
+        "facts_digest": {
+          "toolchain_missing": [
+            "gcc",
+            "cmake",
+            "make"
+          ],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "down"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "install_toolchain",
+      "diagnosis": "sense 发现缺编译工具链 → 用节点包管理器自装 build-essential + cmake",
+      "action": "pkg_install_toolchain",
+      "outcome": {
+        "status": "fail",
+        "error": "unknown action pkg_install_toolchain"
+      }
+    },
+    {
+      "round": 11,
+      "ts": "2026-10-16T10:37:18Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": "unknown action pkg_install_toolchain",
+        "facts_digest": {
+          "toolchain_missing": [
+            "gcc",
+            "cmake",
+            "make"
+          ],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "down"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "install_toolchain",
+      "diagnosis": "sense 发现缺编译工具链 → 用节点包管理器自装 build-essential + cmake",
+      "action": "pkg_install_toolchain",
+      "outcome": {
+        "status": "fail",
+        "error": "unknown action pkg_install_toolchain"
+      }
+    },
+    {
+      "round": 12,
+      "ts": "2026-10-16T10:37:23Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": "unknown action pkg_install_toolchain",
+        "facts_digest": {
+          "toolchain_missing": [
+            "gcc",
+            "cmake",
+            "make"
+          ],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "down"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "install_toolchain",
+      "diagnosis": "sense 发现缺编译工具链 → 用节点包管理器自装 build-essential + cmake",
+      "action": "pkg_install_toolchain",
+      "outcome": {
+        "status": "fail",
+        "error": "unknown action pkg_install_toolchain"
+      }
+    },
+    {
+      "round": 1,
+      "ts": "2026-10-16T10:40:12Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": null,
+        "facts_digest": {
+          "toolchain_missing": [
+            "gcc",
+            "cmake",
+            "make"
+          ],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "down"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "install_toolchain",
+      "diagnosis": "sense 发现缺编译工具链 → 用节点包管理器自装 build-essential + cmake",
+      "action": "install_toolchain",
+      "outcome": {
+        "status": "ok",
+        "elapsed_s": 15.2
+      }
+    },
+    {
+      "round": 2,
+      "ts": "2026-10-16T10:40:20Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": null,
+        "facts_digest": {
+          "toolchain_missing": [],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "up"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "acquire_source",
+      "diagnosis": "引擎源码未就位：本地 tgz 优先，否则按设备出网选通道（github https 通则 clone）",
+      "action": "acquire_source",
+      "outcome": {
+        "status": "ok",
+        "channel": "local_tgz",
+        "members": 4185
+      }
+    },
+    {
+      "round": 3,
+      "ts": "2026-10-16T10:41:54Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": null,
+        "facts_digest": {
+          "toolchain_missing": [],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "up"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "build_engine",
+      "diagnosis": "源码就位但引擎未过自检 → cmake 本机构建（GGML_NATIVE，RPATH $ORIGIN，-j cores）+ --version/ldd 自检",
+      "action": "build",
+      "outcome": {
+        "status": "ok",
+        "version": "version: 0.7.0-dev (build 0, commit unknown)",
+        "unresolved": [],
+        "elapsed_s": 89.4
+      }
+    },
+    {
+      "round": 4,
+      "ts": "2026-10-16T10:42:03Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": null,
+        "facts_digest": {
+          "toolchain_missing": [],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "down"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "package_artifact",
+      "diagnosis": "引擎二进制自检通过 → 打包为引擎工件（bin/ 布局）并组装 apply 用 appspec（模型镜像按出网排序）",
+      "action": "package",
+      "outcome": {
+        "status": "ok",
+        "artifact": "/root/bicameral-sandbox/nodeagent/artifacts/llama-ubuntu22.04-x86_64.tgz",
+        "sha256": "aed446d7237b88c4fd9f428823aac5b56bc9f2e58ff43b599f38f8aba45a19cc",
+        "bytes": 6898321,
+        "apply_spec": "/root/bicameral-sandbox/nodeagent/qwen3-0.6b-q8_0.apply.json",
+        "version": "version: 0.7.0-dev (build 0, commit unknown)"
+      }
+    },
+    {
+      "round": 5,
+      "ts": "2026-10-16T10:42:08Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": null,
+        "facts_digest": {
+          "toolchain_missing": [],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "up"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "apply_install",
+      "diagnosis": "引擎工件与 appspec 就绪 → 调 install.py apply 完成 absent→ready",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "HTTPError: HTTP Error 429: Too Many Requests | HTTPError: HTTP Error 429: Too Many Requests | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)",
+        "rc": 3
+      }
+    },
+    {
+      "round": 6,
+      "ts": "2026-10-16T10:42:28Z",
+      "observed": {
+        "error_class": "rate_limited",
+        "error": "HTTPError: HTTP Error 429: Too Many Requests | HTTPError: HTTP Error 429: Too Many Requests | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)",
+        "facts_digest": {
+          "toolchain_missing": [],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "up"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "backoff_retry",
+      "diagnosis": "模型镜像限流（429/Too Many Requests）→ 有界指数退避后重试 apply（apply 幂等，引擎段已 skip）",
+      "action": "backoff",
+      "outcome": {
+        "status": "ok",
+        "slept_s": 20.0
+      }
+    },
+    {
+      "round": 7,
+      "ts": "2026-10-16T10:43:18Z",
+      "observed": {
+        "error_class": "unknown",
+        "error": null,
+        "facts_digest": {
+          "toolchain_missing": [],
+          "pkg_mgr": "apt",
+          "egress": {
+            "pypi": "up",
+            "hf": "down",
+            "hf_mirror": "up",
+            "github_https": "down"
+          },
+          "port_free": true
+        }
+      },
+      "rule": "apply_install",
+      "diagnosis": "引擎工件与 appspec 就绪 → 调 install.py apply 完成 absent→ready",
+      "action": "apply",
+      "outcome": {
+        "status": "ok",
+        "marker": {
+          "schema": "bicameral-install-state/1",
+          "ts": 1792147398.752,
+          "app": "qwen3-0.6b-q8_0",
+          "state": "ready",
+          "dedup_key": "qwen3-0.6b-q8_0:9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+          "model_sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+          "engine_binary": "/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server",
+          "engine_sha256_16": "c8be70d331ae7428",
+          "port": 18010,
+          "health": "/health",
+          "pid": 6511,
+          "argv": [
+            "/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server",
+            "-m",
+            "/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "18010",
+            "-c",
+            "2048",
+            "-t",
+            "32"
+          ],
+          "install_dir": "/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0"
+        }
+      }
+    }
+  ],
+  "diagnose_history_total": 19
+}

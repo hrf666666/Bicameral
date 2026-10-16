@@ -1,0 +1,157 @@
+install: {"ts":1792147192.168,"event":"NA_BOOTSTRAP","phase":"start","app":"qwen3-0.6b-q8_0","strategy":"source","sandbox":"/root/bicameral-sandbox","appspec_sha256_16":"26ddeddcd22243b9"}
+install: {"ts":1792147197.201,"event":"NA_SENSE","round":1,"toolchain":{"gcc":false,"g++":false,"cmake":false,"make":false,"git":false},"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"down"},"port_free":true,"glibc":"2.35","cores":128}
+install: {"ts":1792147197.201,"event":"NA_ACTION","action":"pkg_install","mgr":"apt","packages":["build-essential","cmake"],"argvs":[["apt-get","update"],["apt-get","install","-y","build-essential","cmake"]],"phase":"start","note":"destructive action confined to the package manager's declared domain"}
+install: {"ts":1792147212.369,"event":"NA_ACTION","action":"pkg_install","mgr":"apt","packages":["build-essential","cmake"],"phase":"done","status":"ok","elapsed_s":15.2,"steps":["rc=0 Reading package lists...","rc=0 debconf: delaying package configuration, since apt-utils is not installed"]}
+install: {"ts":1792147212.369,"event":"NA_DIAGNOSE","round":1,"observed":{"error_class":"unknown","error":null,"facts_digest":{"toolchain_missing":["gcc","cmake","make"],"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"down"},"port_free":true}},"diagnosis":"sense 发现缺编译工具链 → 用节点包管理器自装 build-essential + cmake","rule":"install_toolchain","action":"install_toolchain","outcome":{"status":"ok","elapsed_s":15.2}}
+install: {"ts":1792147212.369,"event":"NA_VERIFY","round":1,"rule":"install_toolchain","status":"ok","elapsed_s":15.2}
+nodeagent: round 1: rule=install_toolchain action=install_toolchain → ok
+install: {"ts":1792147217.398,"event":"NA_SENSE","round":2,"toolchain":{"gcc":true,"g++":true,"cmake":true,"make":true,"git":false},"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true,"glibc":"2.35","cores":128}
+install: {"ts":1792147217.398,"event":"NA_ACTION","action":"acquire_source","channels":["local_tgz:/root/bicameral-sandbox/llama-src.tgz"],"phase":"start"}
+install: {"ts":1792147217.435,"event":"NA_ACTION","action":"extract_source","src":"/root/bicameral-sandbox/nodeagent/src","tgz":"/root/bicameral-sandbox/llama-src.tgz","phase":"start","note":"sandbox-confined extraction (install.path_inside)"}
+install: {"ts":1792147220.14,"event":"NA_ACTION","action":"extract_source","phase":"done","status":"ok","members":4185,"extracted_bytes":177988917}
+install: {"ts":1792147220.141,"event":"NA_DIAGNOSE","round":2,"observed":{"error_class":"unknown","error":null,"facts_digest":{"toolchain_missing":[],"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true}},"diagnosis":"引擎源码未就位：本地 tgz 优先，否则按设备出网选通道（github https 通则 clone）","rule":"acquire_source","action":"acquire_source","outcome":{"status":"ok","channel":"local_tgz","members":4185}}
+install: {"ts":1792147220.141,"event":"NA_VERIFY","round":2,"rule":"acquire_source","status":"ok"}
+nodeagent: round 2: rule=acquire_source action=acquire_source → ok
+install: {"ts":1792147225.176,"event":"NA_SENSE","round":3,"toolchain":{"gcc":true,"g++":true,"cmake":true,"make":true,"git":false},"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true,"glibc":"2.35","cores":128}
+install: {"ts":1792147225.176,"event":"NA_ACTION","action":"build","argv":["cmake","-S","/root/bicameral-sandbox/nodeagent/src","-B","/root/bicameral-sandbox/nodeagent/build","-DGGML_NATIVE=ON","-DLLAMA_CURL=OFF","-DCMAKE_BUILD_RPATH_USE_ORIGIN=ON","-DCMAKE_BUILD_TYPE=Release"],"phase":"start","note":"sandbox-confined build; jobs=128"}
+install: {"ts":1792147226.664,"event":"NA_ACTION","action":"build","argv":["cmake","-S","/root/bicameral-sandbox/nodeagent/src","-B","/root/bicameral-sandbox/nodeagent/build","-DGGML_NATIVE=ON","-DLLAMA_CURL=OFF","-DCMAKE_BUILD_RPATH_USE_ORIGIN=ON","-DCMAKE_BUILD_TYPE=Release"],"phase":"done","status":"ok"}
+install: {"ts":1792147226.664,"event":"NA_ACTION","action":"build","argv":["cmake","--build","/root/bicameral-sandbox/nodeagent/build","--target","llama-server","-j","128"],"phase":"start","note":"sandbox-confined build; jobs=128"}
+install: {"ts":1792147314.576,"event":"NA_ACTION","action":"build","argv":["cmake","--build","/root/bicameral-sandbox/nodeagent/build","--target","llama-server","-j","128"],"phase":"done","status":"ok"}
+install: {"ts":1792147314.591,"event":"NA_VERIFY","what":"built-engine_selfcheck","status":"ok","binary":"/root/bicameral-sandbox/nodeagent/build/bin/llama-server","version":"version: 0.7.0-dev (build 0, commit unknown)"}
+install: {"ts":1792147314.591,"event":"NA_DIAGNOSE","round":3,"observed":{"error_class":"unknown","error":null,"facts_digest":{"toolchain_missing":[],"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true}},"diagnosis":"源码就位但引擎未过自检 → cmake 本机构建（GGML_NATIVE，RPATH $ORIGIN，-j cores）+ --version/ldd 自检","rule":"build_engine","action":"build","outcome":{"status":"ok","version":"version: 0.7.0-dev (build 0, commit unknown)","unresolved":[],"elapsed_s":89.4}}
+install: {"ts":1792147314.591,"event":"NA_VERIFY","round":3,"rule":"build_engine","status":"ok","elapsed_s":89.4}
+nodeagent: round 3: rule=build_engine action=build → ok
+install: {"ts":1792147319.62,"event":"NA_SENSE","round":4,"toolchain":{"gcc":true,"g++":true,"cmake":true,"make":true,"git":false},"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"down"},"port_free":true,"glibc":"2.35","cores":128}
+install: {"ts":1792147319.62,"event":"NA_ACTION","action":"package","artifact":"/root/bicameral-sandbox/nodeagent/artifacts/llama-ubuntu22.04-x86_64.tgz","phase":"start","note":"tar czf bin/ layout (llama-server + bundled .so)"}
+install: {"ts":1792147323.067,"event":"NA_VERIFY","what":"artifact_selfcheck","status":"ok","binary":"/root/bicameral-sandbox/nodeagent/scratch/roundtrip/bin/llama-server","version":"version: 0.7.0-dev (build 0, commit unknown)"}
+install: {"ts":1792147323.071,"event":"NA_ACTION","action":"package","phase":"done","status":"ok","artifact":"/root/bicameral-sandbox/nodeagent/artifacts/llama-ubuntu22.04-x86_64.tgz","sha256":"aed446d7237b88c4fd9f428823aac5b56bc9f2e58ff43b599f38f8aba45a19cc","bytes":6898321,"apply_spec":"/root/bicameral-sandbox/nodeagent/qwen3-0.6b-q8_0.apply.json","model_mirrors":["https://hf-mirror.com","https://huggingface.co"]}
+install: {"ts":1792147323.071,"event":"NA_DIAGNOSE","round":4,"observed":{"error_class":"unknown","error":null,"facts_digest":{"toolchain_missing":[],"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"down"},"port_free":true}},"diagnosis":"引擎二进制自检通过 → 打包为引擎工件（bin/ 布局）并组装 apply 用 appspec（模型镜像按出网排序）","rule":"package_artifact","action":"package","outcome":{"status":"ok","artifact":"/root/bicameral-sandbox/nodeagent/artifacts/llama-ubuntu22.04-x86_64.tgz","sha256":"aed446d7237b88c4fd9f428823aac5b56bc9f2e58ff43b599f38f8aba45a19cc","bytes":6898321,"apply_spec":"/root/bicameral-sandbox/nodeagent/qwen3-0.6b-q8_0.apply.json","version":"version: 0.7.0-dev (build 0, commit unknown)"}}
+install: {"ts":1792147323.071,"event":"NA_VERIFY","round":4,"rule":"package_artifact","status":"ok"}
+nodeagent: round 4: rule=package_artifact action=package → ok
+install: {"ts":1792147323.337,"event":"NA_SENSE","round":5,"toolchain":{"gcc":true,"g++":true,"cmake":true,"make":true,"git":false},"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true,"glibc":"2.35","cores":128}
+install: {"ts":1792147323.337,"event":"NA_ACTION","action":"apply","appspec":"/root/bicameral-sandbox/nodeagent/qwen3-0.6b-q8_0.apply.json","phase":"start","note":"install.py apply: absent → ready (its own audited flow)"}
+install: {"ts":1792147323.338,"event":"INSTALL_START","app":"qwen3-0.6b-q8_0","appspec_sha256_16":"5cd25a7918b154eb","dedup_key":"qwen3-0.6b-q8_0:9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031","sandbox":"/root/bicameral-sandbox"}
+install: {"ts":1792147323.355,"event":"ENGINE_DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"ok","mirror":1,"attempt":1,"url":"file:///root/bicameral-sandbox/nodeagent/artifacts/llama-ubuntu22.04-x86_64.tgz","bytes":6898321,"sha256_16":"aed446d7237b88c4"}
+install: {"ts":1792147323.355,"event":"ENGINE_VERIFY","app":"qwen3-0.6b-q8_0","status":"ok","what":"engine-archive","sha256":"aed446d7237b88c4fd9f428823aac5b56bc9f2e58ff43b599f38f8aba45a19cc","bytes":6898321}
+install: {"ts":1792147323.62,"event":"ENGINE_PLACE","app":"qwen3-0.6b-q8_0","path":"/root/bicameral-sandbox/engines/llama.cpp","binary":"/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server","archive_bytes":6898321,"members":20,"extracted_bytes":20066240,"binary_mode":"0755","note":"engine.binary := /root/bicameral-sandbox/engines/llama.cpp/bin/llama-server for the rest of this flow"}
+install: {"ts":1792147323.621,"event":"ENGINE_FOUND","app":"qwen3-0.6b-q8_0","name":"llama.cpp","binary":"/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server","sha256_16":"c8be70d331ae7428","note":"pin_matched omitted means no engine.sha256 pin; the fingerprint is recorded anyway (§5 安装目录指纹入审计)"}
+install: {"ts":1792147323.621,"event":"STATE","app":"qwen3-0.6b-q8_0","phase":"pre","state":"partial","missing":["model file not found: /root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","service on port 18010 not healthy"]}
+install: {"ts":1792147323.621,"event":"STATE","app":"qwen3-0.6b-q8_0","phase":"decision","action":"fresh","why":"no marker"}
+install: {"ts":1792147323.997,"event":"DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"fail","mirror":1,"attempt":1,"url":"https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf","error":"HTTPError: HTTP Error 429: Too Many Requests"}
+install: {"ts":1792147326.393,"event":"DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"fail","mirror":1,"attempt":2,"url":"https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf","error":"HTTPError: HTTP Error 429: Too Many Requests"}
+install: {"ts":1792147326.476,"event":"DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"fail","mirror":2,"attempt":1,"url":"https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf","error":"URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>"}
+install: {"ts":1792147328.582,"event":"DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"fail","mirror":2,"attempt":2,"url":"https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf","error":"URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>"}
+install: {"ts":1792147328.582,"event":"INSTALL_FAIL","app":"qwen3-0.6b-q8_0","step":"download","error":"all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)","exit_code":3}
+install: FAIL at download: all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)
+install: {"ts":1792147328.584,"event":"ROLLBACK","app":"qwen3-0.6b-q8_0","reason":"failed:download","removed_dir":true,"state":"absent"}
+install: {"ts":1792147328.584,"event":"NA_ACTION","action":"apply","phase":"done","rc":3,"status":"fail","error":"HTTPError: HTTP Error 429: Too Many Requests | HTTPError: HTTP Error 429: Too Many Requests | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)"}
+install: {"ts":1792147328.584,"event":"NA_DIAGNOSE","round":5,"observed":{"error_class":"unknown","error":null,"facts_digest":{"toolchain_missing":[],"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true}},"diagnosis":"引擎工件与 appspec 就绪 → 调 install.py apply 完成 absent→ready","rule":"apply_install","action":"apply","outcome":{"status":"fail","error":"HTTPError: HTTP Error 429: Too Many Requests | HTTPError: HTTP Error 429: Too Many Requests | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)","rc":3}}
+install: {"ts":1792147328.584,"event":"NA_VERIFY","round":5,"rule":"apply_install","status":"fail","error":"HTTPError: HTTP Error 429: Too Many Requests | HTTPError: HTTP Error 429: Too Many Requests | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)"}
+nodeagent: round 5: rule=apply_install action=apply → fail (HTTPError: HTTP Error 429: Too Many Requests | HTTPError: HTTP Error 429: Too Many Requests | URLError: <urlopen error [)
+install: {"ts":1792147328.837,"event":"NA_SENSE","round":6,"toolchain":{"gcc":true,"g++":true,"cmake":true,"make":true,"git":false},"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true,"glibc":"2.35","cores":128}
+install: {"ts":1792147328.837,"event":"NA_ACTION","action":"backoff","seconds":20.0,"phase":"start","note":"bounded exponential backoff before retrying apply"}
+install: {"ts":1792147348.857,"event":"NA_ACTION","action":"backoff","seconds":20.0,"phase":"done","status":"ok"}
+install: {"ts":1792147348.857,"event":"NA_DIAGNOSE","round":6,"observed":{"error_class":"rate_limited","error":"HTTPError: HTTP Error 429: Too Many Requests | HTTPError: HTTP Error 429: Too Many Requests | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)> | all mirrors exhausted (last: URLError: <urlopen error [SSL] unknown error (_ssl.c:1007)>)","facts_digest":{"toolchain_missing":[],"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"up"},"port_free":true}},"diagnosis":"模型镜像限流（429/Too Many Requests）→ 有界指数退避后重试 apply（apply 幂等，引擎段已 skip）","rule":"backoff_retry","action":"backoff","outcome":{"status":"ok","slept_s":20.0}}
+install: {"ts":1792147348.857,"event":"NA_VERIFY","round":6,"rule":"backoff_retry","status":"ok"}
+nodeagent: round 6: rule=backoff_retry action=backoff → ok
+install: {"ts":1792147353.888,"event":"NA_SENSE","round":7,"toolchain":{"gcc":true,"g++":true,"cmake":true,"make":true,"git":false},"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"down"},"port_free":true,"glibc":"2.35","cores":128}
+install: {"ts":1792147353.888,"event":"NA_ACTION","action":"apply","appspec":"/root/bicameral-sandbox/nodeagent/qwen3-0.6b-q8_0.apply.json","phase":"start","note":"install.py apply: absent → ready (its own audited flow)"}
+install: {"ts":1792147353.888,"event":"INSTALL_START","app":"qwen3-0.6b-q8_0","appspec_sha256_16":"5cd25a7918b154eb","dedup_key":"qwen3-0.6b-q8_0:9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031","sandbox":"/root/bicameral-sandbox"}
+install: {"ts":1792147353.889,"event":"ENGINE_DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"skip","binary":"/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server","sha256_16":"c8be70d331ae7428","archive_sha256":"aed446d7237b88c4fd9f428823aac5b56bc9f2e58ff43b599f38f8aba45a19cc","note":"engine already installed from the pinned archive; download/extract skipped (idempotent)"}
+install: {"ts":1792147353.889,"event":"ENGINE_FOUND","app":"qwen3-0.6b-q8_0","name":"llama.cpp","binary":"/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server","sha256_16":"c8be70d331ae7428","note":"pin_matched omitted means no engine.sha256 pin; the fingerprint is recorded anyway (§5 安装目录指纹入审计)"}
+install: {"ts":1792147353.889,"event":"STATE","app":"qwen3-0.6b-q8_0","phase":"pre","state":"partial","missing":["model file not found: /root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","service on port 18010 not healthy"]}
+install: {"ts":1792147353.889,"event":"STATE","app":"qwen3-0.6b-q8_0","phase":"decision","action":"fresh","why":"no marker"}
+install: {"ts":1792147396.181,"event":"DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"ok","mirror":1,"attempt":1,"url":"https://cas-bridge.xethub.hf.co/xet-bridge-us/681881ef3319aedbfd81dc51/18d608d38b934c86fc3f3a050157b2d4df8d12330de6d13af3ba201edd0e6539","bytes":639446688,"sha256_16":"9465e63a22add535"}
+install: {"ts":1792147396.181,"event":"VERIFY_OK","app":"qwen3-0.6b-q8_0","what":"model","sha256":"9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031","bytes":639446688}
+install: {"ts":1792147396.182,"event":"PLACE","app":"qwen3-0.6b-q8_0","path":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","bytes":639446688}
+install: {"ts":1792147396.183,"event":"START","app":"qwen3-0.6b-q8_0","pid":6511,"binary":"/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server","port":18010,"args":["-m","/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","--host","127.0.0.1","--port","18010","-c","2048","-t","32"],"log":"service.log"}
+install: {"ts":1792147398.189,"event":"HEALTH","app":"qwen3-0.6b-q8_0","port":18010,"path":"/health","http_status":200,"attempts":3,"elapsed_ms":2005}
+install: {"ts":1792147398.889,"event":"PROBE_REFRESH","app":"qwen3-0.6b-q8_0","probe_state":"partial","probe_missing":["engine 'llama.cpp' (binary 'llama-server') not found","model file found outside appspec path: /root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf"],"probe_sha256_16":"a2ce9db92eff2fb7","note":"probe engine scan covers PATH+install roots; an engine.binary pinned at a custom path is reconciled by the install marker"}
+install: {"ts":1792147398.892,"event":"READY","app":"qwen3-0.6b-q8_0","port":18010,"install_dir":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0","dedup":false,"install_state":"ready","model_sha256_16":"9465e63a22add535","engine_binary":"/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server"}
+install: READY: qwen3-0.6b-q8_0 on port 18010 (fresh)
+install: {"ts":1792147398.892,"event":"NA_ACTION","action":"apply","phase":"done","rc":0,"status":"ok"}
+install: {"ts":1792147398.893,"event":"NA_DIAGNOSE","round":7,"observed":{"error_class":"unknown","error":null,"facts_digest":{"toolchain_missing":[],"pkg_mgr":"apt","egress":{"pypi":"up","hf":"down","hf_mirror":"up","github_https":"down"},"port_free":true}},"diagnosis":"引擎工件与 appspec 就绪 → 调 install.py apply 完成 absent→ready","rule":"apply_install","action":"apply","outcome":{"status":"ok","marker":{"schema":"bicameral-install-state/1","ts":1792147398.752,"app":"qwen3-0.6b-q8_0","state":"ready","dedup_key":"qwen3-0.6b-q8_0:9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031","model_sha256":"9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031","engine_binary":"/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server","engine_sha256_16":"c8be70d331ae7428","port":18010,"health":"/health","pid":6511,"argv":["/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server","-m","/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","--host","127.0.0.1","--port","18010","-c","2048","-t","32"],"install_dir":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0"}}}
+install: {"ts":1792147398.893,"event":"NA_VERIFY","round":7,"rule":"apply_install","status":"ok"}
+nodeagent: round 7: rule=apply_install action=apply → ok
+install: {"ts":1792147399.408,"event":"NA_VERIFY","what":"selfcheck","app":"qwen3-0.6b-q8_0","status":"ok","summary":"7 checks: 3 PASS, 0 FAIL, 4 SKIP"}
+install: {"ts":1792147399.409,"event":"NA_BOOTSTRAP","phase":"done","app":"qwen3-0.6b-q8_0","status":"ready","rounds":7,"elapsed_s":206.7}
+{
+  "bootstrap": {
+    "app": "qwen3-0.6b-q8_0",
+    "status": "ready",
+    "strategy": "source",
+    "rounds": 7,
+    "elapsed_s": 206.7
+  },
+  "selfcheck": {
+    "checks": [
+      {
+        "check": "base_health",
+        "status": "PASS",
+        "detail": {
+          "url": "http://127.0.0.1:18010/health",
+          "http_status": 200,
+          "body": {
+            "status": "ok"
+          }
+        },
+        "suggestion": null
+      },
+      {
+        "check": "base_models",
+        "status": "PASS",
+        "detail": {
+          "http_status": 200,
+          "models": [
+            "/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf"
+          ]
+        },
+        "suggestion": null
+      },
+      {
+        "check": "base_completion",
+        "status": "PASS",
+        "detail": {
+          "http_status": 200,
+          "content_excerpt": " Paris. The capital of France is also the capital of the Republic of France.",
+          "predicted_per_second": 31.941058100784684,
+          "error": null
+        },
+        "suggestion": null
+      },
+      {
+        "check": "agent_healthz",
+        "status": "SKIP",
+        "detail": {
+          "reason": "no --agent given"
+        },
+        "suggestion": null
+      },
+      {
+        "check": "agent_audit",
+        "status": "SKIP",
+        "detail": {
+          "reason": "no --agent given"
+        },
+        "suggestion": null
+      },
+      {
+        "check": "agent_nonce_replay",
+        "status": "SKIP",
+        "detail": {
+          "reason": "no --agent given"
+        },
+        "suggestion": null
+      },
+      {
+        "check": "agent_budget",
+        "status": "SKIP",
+        "detail": {
+          "reason": "no --agent given"
+        },
+        "suggestion": null
+      }
+    ],
+    "summary": "7 checks: 3 PASS, 0 FAIL, 4 SKIP"
+  }
+}
