@@ -19,8 +19,9 @@ Subcommands:
     status [name]           report install_state from sandbox markers plus
                             live pid/health checks
     selftest                pure-function self-test (schema validation,
-                            URL building, dedup decisions, redaction,
-                            pid-state/argv parsing, audit fail-closed)
+                            engine.install schema, URL building, dedup
+                            decisions, redaction, pid-state/argv parsing,
+                            tar-member traversal rejection, audit fail-closed)
 
 Flow of apply (each step audited; ANY failure → rollback; the whole flow
 runs under an exclusive <sandbox>/apps/<name>.lock — a second concurrent
@@ -29,7 +30,9 @@ apply of the same app exits 6 instead of racing the first):
     engine.name must be listed in APPSPEC_ENGINE_BINARIES and engine.binary
     must have a whitelisted basename — interpreters never pass) → probe
     current install_state (sandbox
-    marker + filesystem/service facts) → resolve engine (dual sha256, §5) →
+    marker + filesystem/service facts) → resolve engine (dual sha256, §5;
+    with an engine.install node and no engine.binary, a not-on-disk engine
+    is downloaded, verified and extracted first — see below) →
     download model (mirror_urls tried in order, bounded retries/timeouts; a
     hash mismatch on one mirror only fails that attempt) → verify sha256
     (mismatch ⇒ VERIFY_FAIL, the file is never installed) → place into
@@ -38,6 +41,23 @@ apply of the same app exits 6 instead of racing the first):
     re-verify the placed sha256 (TOCTOU guard) → re-run probe/1 to refresh
     install_state → READY.
 
+Engine-level install (optional engine.install node; the engine no longer
+has to be pre-provisioned on the device):
+    {"install": {"mirror_urls": ["http://…/llama-cpu.tgz"],   # concrete
+                 "sha256": "<tarball sha256>", "format": "tgz",
+                 "strip_components": 0, "binary_inside": "bin/llama-server"}}
+    When engine.binary is absent and the whitelisted engine is not found on
+    the device, the pinned tarball is downloaded with the same bounded
+    machinery as models (mirror fallback, streaming sha256, stall guard,
+    adaptive deadline) → extracted into <sandbox>/engines/<engine.name>/
+    with per-member traversal checks (absolute names and any '..' part are
+    rejected; links must stay inside; only dirs/regular files land) →
+    binary_inside (or a unique whitelisted executable) is chmod 0755 →
+    that path becomes engine.binary for the rest of the flow. Idempotent:
+    an already-extracted resolvable engine skips the download. Audit:
+    ENGINE_DOWNLOAD / ENGINE_VERIFY / ENGINE_PLACE (ENGINE_VERIFY_FAIL on
+    a tarball-pin mismatch; a half-extracted tree is removed on failure).
+
 Sandbox layout (default /root/bicameral-sandbox per paradigm; override with
 --sandbox-root or BICAMERAL_SANDBOX_ROOT — the default assumes root; on a
 non-root box redirect it):
@@ -45,7 +65,12 @@ non-root box redirect it):
     <sandbox>/apps/<name>/.bicameral-install-state.json    marker (state/pid/sha)
     <sandbox>/apps/<name>/service.log                      service stdout+stderr
     <sandbox>/apps/<name>.lock                             apply/rollback mutex
+    <sandbox>/engines/<engine.name>/                       engine-level install
+                                                           (engine.install node;
+                                                           shared across apps)
     <sandbox>/downloads/<name>-<sha12>-<pid>.part          in-flight download
+    <sandbox>/downloads/engine-<name>-<sha12>-<pid>.part   in-flight engine
+                                                           archive download
     <sandbox>/audit.jsonl                                  audit trail (mandatory
                                                            for apply/rollback:
                                                            fail-closed when
@@ -54,7 +79,8 @@ non-root box redirect it):
 Audit events (style-aligned with bicameral/server.py: ts + event + key
 summary, never secrets — mirror URLs are redacted to scheme://host/path so a
 token-bearing query never lands in the log):
-    INSTALL_START, STATE, DEDUP, ENGINE_FOUND, DOWNLOAD, VERIFY_OK,
+    INSTALL_START, STATE, DEDUP, ENGINE_FOUND, ENGINE_DOWNLOAD,
+    ENGINE_VERIFY, ENGINE_VERIFY_FAIL, ENGINE_PLACE, DOWNLOAD, VERIFY_OK,
     VERIFY_FAIL, PLACE, START, HEALTH, PROBE_REFRESH, READY, INSTALL_FAIL,
     ROLLBACK, AUDIT_DEGRADED (close-time: audit writes lost mid-flow).
 
@@ -64,10 +90,15 @@ Dual sha256 semantics (paradigm §5 supply-chain row: "appspec 双 sha256 +
       equal the pin exactly, else VERIFY_FAIL + rollback.
     - engine.sha256 is OPTIONAL (the binary may already be on the device).
       When the pin is given, the binary found at engine.binary (or via
-      PATH/install roots) must match exactly, else VERIFY_FAIL + rollback.
+      PATH/install roots, or freshly extracted from engine.install) must
+      match exactly, else VERIFY_FAIL + rollback.
       When no pin is given, the found binary's sha256-16 is still
       fingerprinted into the audit trail — a fingerprint is a fact even
       without a pin.
+    - engine.install.sha256 pins the ARCHIVE (the tarball as served by the
+      mirror); engine.sha256, when also given, pins the extracted binary.
+      Both are exact-match verified; neither byte is extracted or run
+      before its pin passes.
 
 Exit codes: 0 ok · 1 audit degraded (apply succeeded but events were lost) ·
 2 usage/schema/audit-unavailable · 3 engine/download/verify failure ·
@@ -84,6 +115,7 @@ import argparse
 import fcntl
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -91,6 +123,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.parse
@@ -99,6 +132,8 @@ import urllib.request
 SCHEMA = "appspec/1"
 MARKER_SCHEMA = "bicameral-install-state/1"
 MARKER_NAME = ".bicameral-install-state.json"
+ENGINE_MARKER_SCHEMA = "bicameral-engine-install/1"
+ENGINE_MARKER_NAME = ".bicameral-engine-install.json"
 DEFAULT_SANDBOX = "/root/bicameral-sandbox"
 AUDIT_NAME = "audit.jsonl"
 
@@ -122,6 +157,8 @@ APPSPEC_ENGINE_BINARIES = {
 
 LIMITS = {
     "model_max_bytes": 32 * 1024 ** 3,     # hard cap on one model download
+    "engine_max_bytes": 2 * 1024 ** 3,     # hard cap on one engine tarball
+    "engine_extract_max_bytes": 4 * 1024 ** 3,   # uncompressed extract cap
     "download_read_timeout_s": 60,         # per-socket-read timeout
     "download_attempt_deadline_s": 900,    # wall clock per attempt (floor;
                                            # extended for known Content-Length)
@@ -144,7 +181,14 @@ LIMITS = {
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 MODEL_FORMATS = ("gguf", "safetensors")
+ENGINE_INSTALL_FORMATS = ("tgz",)
 FORBIDDEN_KEYS = ("actions", "tool_calls")   # same D8 philosophy as server.py
+
+# resolve_engine prefixes its only "not installed anywhere" failure with
+# this marker: it is the single condition an engine.install node is allowed
+# to fix (a found-but-broken binary or a pin mismatch is a fact, never
+# papered over by a fresh download).
+ENGINE_NOT_FOUND = "ENGINE_BINARY_NOT_FOUND"
 
 
 class InstallError(Exception):
@@ -306,6 +350,79 @@ def _bad_str(v, what: str) -> str | None:
     return None
 
 
+def _check_mirror_list(mirrors, label: str) -> str | None:
+    """Shared mirror_urls shape check (model.mirror_urls and
+    engine.install.mirror_urls): list, bounded count, http(s)/file only."""
+    if not isinstance(mirrors, list):
+        return "%s must be a list of base URLs" % label
+    if len(mirrors) > LIMITS["download_mirror_max"]:
+        return "%s exceeds %d entries" % (label, LIMITS["download_mirror_max"])
+    for i, m in enumerate(mirrors):
+        err = _bad_str(m, "%s[%d]" % (label, i))
+        if err:
+            return err
+        u = urllib.parse.urlsplit(m)
+        if u.scheme == "file":
+            ok = bool(u.path)
+        else:
+            ok = u.scheme in ("http", "https") and bool(u.netloc)
+        if not ok:
+            return "%s[%d] must be an http(s) or file base URL" % (label, i)
+    return None
+
+
+def _validate_engine_install(inst, white: dict) -> tuple[dict | None, str | None]:
+    """engine.install node (engine-level install): returns (normalized, None)
+    or (None, reason). Fail-closed: mirror_urls/sha256/format mandatory,
+    unknown fields rejected, binary_inside must be archive-relative with a
+    whitelisted engine-executable basename (A5: the basename decides)."""
+    if not isinstance(inst, dict):
+        return None, "engine.install must be an object"
+    i_need, i_opt = {"mirror_urls", "sha256", "format"}, \
+                    {"strip_components", "binary_inside"}
+    missing = sorted(i_need - set(inst))
+    if missing:
+        return None, "engine.install missing field(s): %s" % ", ".join(missing)
+    unknown = sorted(set(inst) - i_need - i_opt)
+    if unknown:
+        return None, "engine.install unknown field(s): %s" % ", ".join(unknown)
+    err = _check_mirror_list(inst["mirror_urls"], "engine.install.mirror_urls")
+    if err:
+        return None, err
+    if not isinstance(inst["sha256"], str) or not HEX64_RE.match(inst["sha256"]):
+        return None, "engine.install.sha256 is mandatory and must be 64 hex chars"
+    if inst["format"] not in ENGINE_INSTALL_FORMATS:
+        return None, ("engine.install.format must be one of %s"
+                      % ", ".join(ENGINE_INSTALL_FORMATS))
+    norm = {"mirror_urls": list(inst["mirror_urls"]),
+            "sha256": inst["sha256"].lower(),
+            "format": inst["format"],
+            "strip_components": 0}
+    if "strip_components" in inst:
+        sc = inst["strip_components"]
+        if isinstance(sc, bool) or not isinstance(sc, int) or not (0 <= sc <= 32):
+            return None, "engine.install.strip_components must be an int in 0..32"
+        norm["strip_components"] = sc
+    if "binary_inside" in inst:
+        err = _bad_str(inst["binary_inside"], "engine.install.binary_inside")
+        if err:
+            return None, err
+        bi = inst["binary_inside"]
+        if os.path.isabs(bi):
+            return None, ("engine.install.binary_inside must be archive-relative"
+                          " (no leading /)")
+        if any(p in ("", ".", "..") for p in bi.split("/")):
+            return None, ("engine.install.binary_inside must not contain "
+                          "empty/./.. path parts")
+        if white and os.path.basename(bi) not in white["executables"]:
+            return None, ("engine.install.binary_inside basename %r is not a "
+                          "whitelisted executable (one of: %s) — interpreters "
+                          "and other binaries are rejected (A5)"
+                          % (os.path.basename(bi), ", ".join(white["executables"])))
+        norm["binary_inside"] = bi
+    return norm, None
+
+
 def validate_appspec(obj):
     """Strict appspec/1 validation. Returns (spec, None) or (None, reason).
 
@@ -334,7 +451,7 @@ def validate_appspec(obj):
     eng = obj["engine"]
     if not isinstance(eng, dict):
         return None, "engine must be an object"
-    eng_need, eng_opt = {"name"}, {"ref", "binary", "sha256"}
+    eng_need, eng_opt = {"name"}, {"ref", "binary", "sha256", "install"}
     if not eng_need <= set(eng):
         return None, "engine missing field(s): name"
     if not set(eng) <= (eng_need | eng_opt):
@@ -365,6 +482,11 @@ def validate_appspec(obj):
                                     ", ".join(white["executables"])))
     if "sha256" in eng and not HEX64_RE.match(eng["sha256"]):
         return None, "engine.sha256 must be 64 hex chars"
+    install_norm = None
+    if "install" in eng:
+        install_norm, err = _validate_engine_install(eng["install"], white)
+        if err:
+            return None, err
 
     mdl = obj["model"]
     if not isinstance(mdl, dict):
@@ -391,22 +513,9 @@ def validate_appspec(obj):
     if not isinstance(mdl["sha256"], str) or not HEX64_RE.match(mdl["sha256"]):
         return None, "model.sha256 is mandatory and must be 64 hex chars"
     mirrors = mdl.get("mirror_urls", [])
-    if not isinstance(mirrors, list):
-        return None, "model.mirror_urls must be a list of base URLs"
-    if len(mirrors) > LIMITS["download_mirror_max"]:
-        return None, "model.mirror_urls exceeds %d entries" % LIMITS["download_mirror_max"]
-    for i, m in enumerate(mirrors):
-        err = _bad_str(m, "model.mirror_urls[%d]" % i)
-        if err:
-            return None, err
-        u = urllib.parse.urlsplit(m)
-        if u.scheme == "file":
-            ok = bool(u.path)
-        else:
-            ok = u.scheme in ("http", "https") and bool(u.netloc)
-        if not ok:
-            return None, ("model.mirror_urls[%d] must be an http(s) or file "
-                          "base URL" % i)
+    err = _check_mirror_list(mirrors, "model.mirror_urls")
+    if err:
+        return None, err
 
     svc = obj["service"]
     if not isinstance(svc, dict):
@@ -437,16 +546,30 @@ def validate_appspec(obj):
     if _has_forbidden_key(obj):
         return None, "forbidden key (actions/tool_calls) at some depth"
 
+    eng_out = {k: eng[k] for k in ("name", "ref", "binary", "sha256") if k in eng}
+    if install_norm is not None:
+        eng_out["install"] = install_norm
     spec = {
         "schema": SCHEMA,
         "name": obj["name"],
-        "engine": {k: eng[k] for k in ("name", "ref", "binary", "sha256") if k in eng},
+        "engine": eng_out,
         "model": {"repo": mdl["repo"], "file": mdl["file"], "format": mdl["format"],
                   "sha256": mdl["sha256"].lower(), "mirror_urls": list(mirrors)},
         "service": {"port": port, "health": svc.get("health", "/health"),
                     "args": list(svc.get("args", []))},
     }
     return spec, None
+
+
+def dedup_urls(urls: list[str]) -> list[str]:
+    """First-occurrence-wins URL dedup, order preserved (engine.install
+    mirror_urls are concrete artifact URLs — no repo/file join)."""
+    out, seen = [], set()
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
 
 
 def build_mirror_urls(bases: list[str], repo: str, file: str) -> list[str]:
@@ -707,9 +830,9 @@ def resolve_engine(spec: dict) -> tuple[dict | None, str | None]:
     search_name = white["binary"] if white else eng["name"]
     binary = eng.get("binary") or search_binary(search_name)
     if not binary:
-        return None, ("engine %r: binary %r not found (no engine.binary given, "
-                      "and not on PATH/install roots)"
-                      % (eng["name"], search_name))
+        return None, ("%s: engine %r: binary %r not found (no engine.binary "
+                      "given, and not on PATH/install roots)"
+                      % (ENGINE_NOT_FOUND, eng["name"], search_name))
     if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
         return None, "engine binary not executable: %s" % binary
     try:
@@ -742,6 +865,257 @@ def resolve_engine(spec: dict) -> tuple[dict | None, str | None]:
 
 
 # --------------------------------------------------------------------------- #
+# engine-level install (engine.install node: download → verify → extract)
+# --------------------------------------------------------------------------- #
+
+def _tar_member_error(name: str) -> str | None:
+    """Structural traversal check for one tar member name: absolute paths and
+    any '..' path part are rejected (pure; selftest-covered)."""
+    if not name or name.startswith("/") or os.path.isabs(name):
+        return "absolute member path"
+    parts = [p for p in name.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        return "'..' path part"
+    return None
+
+
+def extract_engine_tgz(tar_path: str, dest_root: str,
+                       strip_components: int) -> tuple[int, int]:
+    """Extract a gz tarball into dest_root, member by member (never
+    extractall): every member name must pass _tar_member_error, links must
+    resolve inside dest_root, and only directories/regular files/links are
+    allowed (devices/fifos fail closed). realpath containment is re-checked
+    per member so an earlier symlink member cannot redirect later writes.
+    Total uncompressed size is capped (tar-bomb guard).
+    Returns (extracted_bytes, member_count). Raises InstallError
+    (step='engine')."""
+    total = 0
+    members_out = 0
+    try:
+        tf = tarfile.open(tar_path, "r:gz")
+    except (tarfile.TarError, OSError) as e:
+        raise InstallError("engine", "unreadable tarball: %s: %s"
+                           % (type(e).__name__, str(e)[:200]), 3) from e
+    with tf:
+        try:
+            members = tf.getmembers()
+        except tarfile.TarError as e:
+            raise InstallError("engine", "unreadable tarball index: %s"
+                               % str(e)[:200], 3) from e
+        for m in members:
+            err = _tar_member_error(m.name)
+            if err:
+                raise InstallError("engine", "tar member rejected (%s): %r"
+                                   % (err, m.name[:200]), 3)
+            parts = [p for p in m.name.split("/") if p not in ("", ".")]
+            if strip_components:
+                parts = parts[strip_components:]
+            if not parts:                      # stripped away entirely
+                continue
+            target = os.path.join(dest_root, *parts)
+            if not path_inside(dest_root, target):
+                raise InstallError("engine", "tar member escapes destination: "
+                                   "%r" % m.name[:200], 3)
+            if m.issym() or m.islnk():
+                link = m.linkname
+                resolved = os.path.normpath(
+                    os.path.join(os.path.dirname(target), link))
+                if os.path.isabs(link) or not path_inside(dest_root, resolved):
+                    raise InstallError("engine",
+                                       "tar link member escapes destination: "
+                                       "%r -> %r" % (m.name[:200],
+                                                     link[:200]), 3)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if os.path.lexists(target):
+                    os.remove(target)
+                if m.issym():
+                    os.symlink(link, target)
+                else:
+                    os.link(resolved, target)
+            elif m.isdir():
+                os.makedirs(target, exist_ok=True)
+            elif m.isfile():
+                total += m.size
+                if total > LIMITS["engine_extract_max_bytes"]:
+                    raise InstallError("engine",
+                                       "uncompressed size exceeds "
+                                       "engine_extract_max_bytes (%d)"
+                                       % LIMITS["engine_extract_max_bytes"], 3)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                src = tf.extractfile(m)
+                if src is None:
+                    raise InstallError("engine", "tar member unreadable: %r"
+                                       % m.name[:200], 3)
+                with src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out, 1 << 20)
+                os.chmod(target, m.mode & 0o777)
+            else:
+                raise InstallError("engine", "unsupported tar member type "
+                                   "%r: %r" % (m.type, m.name[:200]), 3)
+            members_out += 1
+    return total, members_out
+
+
+def _locate_engine_binary(dest_root: str, binary_inside: str | None,
+                          exes: tuple[str, ...]) -> str:
+    """The engine executable inside the extracted tree: binary_inside when
+    given (schema already enforced a relative, traversal-free, whitelisted
+    basename), else the unique whitelisted executable found by search —
+    zero or several matches fail closed. Raises InstallError(step='engine')."""
+    if binary_inside:
+        cand = os.path.join(dest_root,
+                            *[p for p in binary_inside.split("/")
+                              if p not in ("", ".")])
+        if not os.path.isfile(cand):
+            raise InstallError("engine", "binary_inside %r not found in the "
+                               "extracted archive (looked at %s)"
+                               % (binary_inside, cand), 3)
+        return cand
+    hits: list[str] = []
+    for dirpath, _dirnames, filenames in os.walk(dest_root):
+        for fn in filenames:
+            if fn in exes:
+                hits.append(os.path.join(dirpath, fn))
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise InstallError("engine", "no whitelisted executable (%s) found in "
+                           "the extracted archive" % ", ".join(exes), 3)
+    raise InstallError("engine", "ambiguous engine binary in the extracted "
+                       "archive (%d hits: %s)" % (len(hits),
+                                                  ", ".join(hits[:4])), 3)
+
+
+def read_engine_marker(eng_root: str) -> dict | None:
+    """Provenance of an engine-level install: which archive sha256 produced
+    the tree at eng_root. None when absent/foreign/corrupt."""
+    try:
+        with open(os.path.join(eng_root, ENGINE_MARKER_NAME), "r",
+                  encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) \
+            and d.get("schema") == ENGINE_MARKER_SCHEMA else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_engine_marker(eng_root: str, data: dict) -> None:
+    data = {"schema": ENGINE_MARKER_SCHEMA, "ts": round(time.time(), 3), **data}
+    tmp = os.path.join(eng_root, ENGINE_MARKER_NAME + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, os.path.join(eng_root, ENGINE_MARKER_NAME))
+
+
+def engine_provenance_matches(marker: dict | None, archive_sha: str) -> bool:
+    """Pure skip gate (selftest-covered): an already-extracted engine may
+    satisfy an engine.install node only when the recorded provenance names
+    exactly the archive pin this appspec wants. A different pin means
+    'reinstall with this pin' — the download then re-verifies every byte,
+    so a wrong pin fails loudly (ENGINE_VERIFY_FAIL) instead of silently
+    reusing a tree it cannot vouch for."""
+    return bool(marker) and marker.get("archive_sha256") == archive_sha
+
+
+def install_engine(audit: Audit, app: str, sandbox: str,
+                   spec: dict) -> tuple[dict, None]:
+    """Engine-level install: turn a not-on-disk whitelisted engine into a
+    resolved one, reusing the model download machinery verbatim.
+
+    Idempotent, provenance-gated: the extracted tree records the archive
+    sha256 it was built from (.bicameral-engine-install.json); when the
+    expected binary sits in <sandbox>/engines/<engine.name>/, passes
+    resolve_engine (including any engine.sha256 pin) AND that provenance
+    equals this appspec's install.sha256, the download is skipped
+    (ENGINE_DOWNLOAD status=skip). A different pin means reinstall with the
+    new pin. Otherwise: pinned tarball download (mirror fallback, streaming
+    sha256, stall guard, adaptive deadline) → ENGINE_VERIFY →
+    traversal-checked extraction → binary_inside chmod 0755 → ENGINE_PLACE
+    → resolve_engine on that path (dual sha256 + ref semantics) → its info
+    feeds the ordinary apply flow as engine.binary. Any failure removes the
+    half-extracted tree and raises InstallError(step='engine', exit 3);
+    a tarball pin mismatch additionally emits ENGINE_VERIFY_FAIL."""
+    eng = spec["engine"]
+    inst = eng["install"]
+    white = APPSPEC_ENGINE_BINARIES.get(eng["name"])
+    exes = white["executables"] if white else ()
+    eng_root = os.path.join(sandbox, "engines", eng["name"])
+    created = False                     # did this run create eng_root?
+    ok = False                          # did the install finish cleanly?
+    try:
+        # --- idempotency: already installed, resolvable, right provenance? - #
+        try:
+            cand = _locate_engine_binary(eng_root, inst.get("binary_inside"),
+                                         exes)
+        except InstallError:
+            cand = None
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            spec2 = dict(spec, engine=dict(eng, binary=cand))
+            info, _err = resolve_engine(spec2)
+            if info is not None and engine_provenance_matches(
+                    read_engine_marker(eng_root), inst["sha256"]):
+                audit.emit("ENGINE_DOWNLOAD", app=app, status="skip",
+                           binary=cand, sha256_16=info["sha256_16"],
+                           archive_sha256=inst["sha256"],
+                           note="engine already installed from the pinned "
+                                "archive; download/extract skipped "
+                                "(idempotent)")
+                ok = True
+                return info, None
+
+        # --- download the pinned archive (model machinery, engine events) -- #
+        os.makedirs(eng_root, exist_ok=True)
+        created = True
+        os.makedirs(os.path.join(sandbox, "downloads"), exist_ok=True)
+        urls = dedup_urls(inst["mirror_urls"])
+        part = os.path.join(sandbox, "downloads", "engine-%s-%s-%d.part"
+                            % (eng["name"], inst["sha256"][:12], os.getpid()))
+        try:
+            got, size = download_model(
+                audit, app, urls, part, inst["sha256"], what="engine",
+                ev_download="ENGINE_DOWNLOAD", ev_verify_fail="ENGINE_VERIFY",
+                max_bytes=LIMITS["engine_max_bytes"])
+        except InstallError as e:
+            if e.reason.startswith("VERIFY_FAIL"):
+                audit.emit("ENGINE_VERIFY_FAIL", app=app, final=True,
+                           expected_sha256=inst["sha256"], error=e.reason)
+            raise InstallError("engine", "engine install: %s" % e.reason,
+                               3) from e
+        audit.emit("ENGINE_VERIFY", app=app, status="ok", what="engine-archive",
+                   sha256=got, bytes=size)
+
+        # --- extract (traversal-checked) + place the executable ------------ #
+        total, members = extract_engine_tgz(part, eng_root,
+                                            inst.get("strip_components", 0))
+        os.remove(part)
+        binary = _locate_engine_binary(eng_root, inst.get("binary_inside"),
+                                       exes)
+        os.chmod(binary, 0o755)
+        audit.emit("ENGINE_PLACE", app=app, path=eng_root, binary=binary,
+                   archive_bytes=size, members=members, extracted_bytes=total,
+                   binary_mode="0755",
+                   note="engine.binary := %s for the rest of this flow" % binary)
+        spec2 = dict(spec, engine=dict(eng, binary=binary))
+        info, err = resolve_engine(spec2)   # fingerprint (+ optional pin/ref)
+        if info is None:
+            raise InstallError("engine", err or "installed engine unresolved", 3)
+        write_engine_marker(eng_root, {"engine": eng["name"],
+                                       "archive_sha256": got,
+                                       "binary": binary,
+                                       "binary_sha256_16": info["sha256_16"]})
+        ok = True
+        return info, None
+    except OSError as e:
+        raise InstallError("engine", "%s: %s"
+                           % (type(e).__name__, str(e)[:200]), 3) from e
+    finally:
+        # a failed engine install never leaves a half-extracted tree behind;
+        # a successful one keeps <sandbox>/engines/<name>/ (it IS the install)
+        if created and not ok:
+            shutil.rmtree(eng_root, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
 # download + verify (bounded)
 # --------------------------------------------------------------------------- #
 
@@ -765,21 +1139,29 @@ def attempt_budget(content_length: int | None) -> float:
 
 
 def download_model(audit: Audit, app: str, urls: list[str], part_path: str,
-                   want_sha: str) -> tuple[str, int]:
-    """Stream the model to part_path, hashing as we go. mirror_urls tried in
-    order; bounded retries per mirror; per-attempt wall clock is the fixed
+                   want_sha: str, *, what: str = "model",
+                   ev_download: str = "DOWNLOAD",
+                   ev_verify_fail: str = "VERIFY_FAIL",
+                   max_bytes: int | None = None) -> tuple[str, int]:
+    """Stream the artifact to part_path, hashing as we go. mirror_urls tried
+    in order; bounded retries per mirror; per-attempt wall clock is the fixed
     floor extended for a known Content-Length, with a no-new-bytes stall
     guard; hard size cap enforced before (Content-Length) and during the
     transfer. Redirects never downgrade https → http.
 
+    `what`/`ev_download`/`ev_verify_fail` label the audit trail (the engine
+    installer reuses this exact machinery with ENGINE_DOWNLOAD/ENGINE_VERIFY
+    names); `max_bytes` overrides the size cap.
+
     A sha256 mismatch on ONE mirror/attempt is just that attempt failing
-    (VERIFY_FAIL final=false, part discarded, next attempt/mirror); only
-    when every mirror and retry is exhausted on mismatches is it fatal
-    (VERIFY_FAIL, exit 3). Other InstallErrors (size cap) fail immediately.
+    (final=false, part discarded, next attempt/mirror); only when every
+    mirror and retry is exhausted on mismatches is it fatal (final=true,
+    exit 3). Other InstallErrors (size cap) fail immediately.
     The file is never installed unless it hashes to the pin.
     Returns (sha256_hex, bytes). Raises InstallError(step='download')."""
     if not urls:
         raise InstallError("download", "no mirror URLs given", 3)
+    max_bytes = LIMITS["model_max_bytes"] if max_bytes is None else max_bytes
     last_err = "no mirror attempted"
     all_hash = True                     # every failure so far a hash mismatch
     opener = urllib.request.build_opener(NoDowngradeRedirectHandler())
@@ -798,11 +1180,11 @@ def download_model(audit: Audit, app: str, urls: list[str], part_path: str,
                         open(part_path, "wb") as out:
                     cl = r.headers.get("Content-Length")
                     total = int(cl) if cl and cl.isdigit() else None
-                    if total is not None and total > LIMITS["model_max_bytes"]:
+                    if total is not None and total > max_bytes:
                         raise InstallError(
                             "download",
-                            "content-length %d exceeds model_max_bytes (%d)"
-                            % (total, LIMITS["model_max_bytes"]), 3)
+                            "content-length %d exceeds max_bytes (%d)"
+                            % (total, max_bytes), 3)
                     deadline = t_start + attempt_budget(total)
                     last_progress = time.monotonic()
                     while True:
@@ -821,18 +1203,17 @@ def download_model(audit: Audit, app: str, urls: list[str], part_path: str,
                             break
                         last_progress = time.monotonic()
                         size += len(chunk)
-                        if size > LIMITS["model_max_bytes"]:
+                        if size > max_bytes:
                             raise InstallError(
                                 "download",
-                                "size exceeds model_max_bytes (%d)"
-                                % LIMITS["model_max_bytes"], 3)
+                                "size exceeds max_bytes (%d)" % max_bytes, 3)
                         h.update(chunk)
                         out.write(chunk)
                 got = h.hexdigest()
                 if got != want_sha:
                     last_err = ("VERIFY_FAIL: sha256 mismatch (got %s…)"
                                 % got[:16])
-                    audit.emit("VERIFY_FAIL", app=app, what="model",
+                    audit.emit(ev_verify_fail, app=app, what=what,
                                final=False, file=os.path.basename(part_path),
                                expected_sha256=want_sha,
                                got_sha256_16=got[:16], mirror=mi + 1,
@@ -840,7 +1221,7 @@ def download_model(audit: Audit, app: str, urls: list[str], part_path: str,
                     _discard_part(part_path)
                     # not fatal: this attempt failed, try again / next mirror
                 else:
-                    audit.emit("DOWNLOAD", app=app, status="ok",
+                    audit.emit(ev_download, app=app, status="ok",
                                mirror=mi + 1, attempt=attempt,
                                url=redact_url(r.geturl()), bytes=size,
                                sha256_16=got[:16])
@@ -851,12 +1232,12 @@ def download_model(audit: Audit, app: str, urls: list[str], part_path: str,
                 last_err = "%s: %s" % (type(e).__name__, str(e)[:200])
                 all_hash = False
                 _discard_part(part_path)
-                audit.emit("DOWNLOAD", app=app, status="fail", mirror=mi + 1,
+                audit.emit(ev_download, app=app, status="fail", mirror=mi + 1,
                            attempt=attempt, url=red, error=last_err)
             if attempt < LIMITS["download_retries_per_mirror"]:
                 time.sleep(LIMITS["download_retry_backoff_s"])
     if all_hash:
-        audit.emit("VERIFY_FAIL", app=app, what="model", final=True,
+        audit.emit(ev_verify_fail, app=app, what=what, final=True,
                    expected_sha256=want_sha, error=last_err)
         raise InstallError("download",
                            "VERIFY_FAIL: sha256 mismatch on every mirror/"
@@ -1131,6 +1512,16 @@ def cmd_apply(args) -> int:
         # --- probe current install_state (marker + filesystem facts) ------ #
         marker = read_marker(p)
         engine_info, eng_err = resolve_engine(spec)
+        if engine_info is None and eng_err is not None \
+                and eng_err.startswith(ENGINE_NOT_FOUND) \
+                and spec["engine"].get("install"):
+            # engine-level install (engine.install node): no engine.binary
+            # given and the whitelisted engine not on disk → download the
+            # pinned archive, verify, extract into <sandbox>/engines/<name>/
+            # and re-resolve on the placed path. Any OTHER engine failure
+            # (found-but-unusable, pin mismatch) is a fact, never papered
+            # over by a fresh download.
+            engine_info, eng_err = install_engine(audit, name, sandbox, spec)
         if engine_info is None:
             if eng_err and eng_err.startswith("VERIFY_FAIL"):
                 audit.emit("VERIFY_FAIL", app=name, what="engine", error=eng_err)
@@ -1481,6 +1872,112 @@ def cmd_selftest(_args) -> int:
     del no_bin["engine"]["ref"]
     check("engine.no_binary_whitelisted_name_ok",
           validate_appspec(no_bin)[0] is not None)
+
+    # --- engine.install node: schema for the engine-level install ---------- #
+    inst_good = json.loads(json.dumps(good))
+    del inst_good["engine"]["binary"]
+    del inst_good["engine"]["sha256"]
+    del inst_good["engine"]["ref"]
+    inst_good["engine"]["install"] = {
+        "mirror_urls": ["http://127.0.0.1:18099/llama-cpu.tgz"],
+        "sha256": "c" * 64, "format": "tgz",
+        "strip_components": 1, "binary_inside": "bin/llama-server"}
+    si, ei = validate_appspec(inst_good)
+    check("install.accepts_full_node", si is not None and ei is None, ei or "")
+    if si:
+        check("install.normalized",
+              si["engine"]["install"] == {
+                  "mirror_urls": ["http://127.0.0.1:18099/llama-cpu.tgz"],
+                  "sha256": "c" * 64, "format": "tgz",
+                  "strip_components": 1, "binary_inside": "bin/llama-server"},
+              str(si["engine"].get("install")))
+    minimal = json.loads(json.dumps(inst_good))
+    minimal["engine"]["install"] = {"mirror_urls": ["file:///m/e.tgz"],
+                                    "sha256": "d" * 64, "format": "tgz"}
+    sm, em = validate_appspec(minimal)
+    check("install.minimal_defaults_strip0",
+          sm is not None and sm["engine"]["install"]["strip_components"] == 0
+          and "binary_inside" not in sm["engine"]["install"], em or "")
+
+    def bad_inst(mutate, label):
+        obj = json.loads(json.dumps(inst_good))
+        mutate(obj)
+        s, e = validate_appspec(obj)
+        check("install.rejects_" + label, s is None and bool(e), e or "accepted")
+
+    bad_inst(lambda o: o["engine"]["install"].pop("mirror_urls"),
+             "missing_mirror_urls")
+    bad_inst(lambda o: o["engine"]["install"].pop("sha256"), "missing_sha256")
+    bad_inst(lambda o: o["engine"]["install"].pop("format"), "missing_format")
+    bad_inst(lambda o: o["engine"]["install"].update(zip="tgz"),
+             "unknown_field")
+    bad_inst(lambda o: o["engine"]["install"].update(format="zip"),
+             "bad_format")
+    bad_inst(lambda o: o["engine"]["install"].update(sha256="c" * 63),
+             "short_sha256")
+    bad_inst(lambda o: o["engine"]["install"].update(sha256="C" * 64),
+             "uppercase_sha256")
+    bad_inst(lambda o: o["engine"]["install"].update(strip_components=-1),
+             "negative_strip")
+    bad_inst(lambda o: o["engine"]["install"].update(strip_components=True),
+             "bool_strip")
+    bad_inst(lambda o: o["engine"]["install"].update(strip_components="1"),
+             "str_strip")
+    bad_inst(lambda o: o["engine"]["install"].update(strip_components=33),
+             "huge_strip")
+    bad_inst(lambda o: o["engine"]["install"].update(binary_inside="/etc/sh"),
+             "abs_binary_inside")
+    bad_inst(lambda o: o["engine"]["install"].update(binary_inside="../sh"),
+             "traversal_binary_inside")
+    bad_inst(lambda o: o["engine"]["install"].update(binary_inside="bin//sh"),
+             "empty_part_binary_inside")
+    bad_inst(lambda o: o["engine"]["install"].update(binary_inside="bin/sh"),
+             "interpreter_basename_inside")
+    bad_inst(lambda o: o["engine"]["install"].update(
+        binary_inside="bin/llama-server-evil"), "basename_mismatch_inside")
+    bad_inst(lambda o: o["engine"]["install"].update(mirror_urls=["ftp://x/e"]),
+             "bad_mirror_scheme_inside")
+    bad_inst(lambda o: o["engine"]["install"].update(mirror_urls="http://x/e"),
+             "mirrors_not_list_inside")
+    bad_inst(lambda o: o["engine"].update(install="tgz"), "install_not_object")
+    # engine.binary + install both present: schema-legal (runtime prefers the
+    # binary; install is the fallback), basename rules unchanged
+    both = json.loads(json.dumps(good))
+    both["engine"]["install"] = {"mirror_urls": ["http://x/e.tgz"],
+                                 "sha256": "c" * 64, "format": "tgz"}
+    check("install.binary_plus_install_ok", validate_appspec(both)[0] is not None)
+    check("install.dedup_urls",
+          dedup_urls(["http://a/x.tgz", "http://a/x.tgz", "http://b/x.tgz"])
+          == ["http://a/x.tgz", "http://b/x.tgz"])
+
+    # provenance gate: skip only when the tree was built from the pinned
+    # archive; a foreign/corrupt/absent marker forces a (re)install
+    check("install.provenance_gate",
+          engine_provenance_matches({"schema": ENGINE_MARKER_SCHEMA,
+                                     "archive_sha256": "c" * 64}, "c" * 64)
+          and not engine_provenance_matches(
+              {"schema": ENGINE_MARKER_SCHEMA, "archive_sha256": "c" * 64},
+              "d" * 64)
+          and not engine_provenance_matches(None, "c" * 64)
+          and not engine_provenance_matches({"schema": "other"}, "c" * 64)
+          and not engine_provenance_matches({}, "c" * 64))
+
+    # resolve_engine's only installable failure is the marked not-found case
+    # (search_binary patched through the module dict: resolve_engine looks it
+    # up as a global at call time, so the patch is deterministic offline)
+    _mod = sys.modules[__name__]
+    orig_search = _mod.search_binary
+    try:
+        _mod.search_binary = lambda binname: None
+        nf_info, nf_err = resolve_engine(
+            {"engine": {"name": "llama.cpp",
+                        "install": {"mirror_urls": ["http://x/e.tgz"],
+                                    "sha256": "c" * 64, "format": "tgz"}}})
+    finally:
+        _mod.search_binary = orig_search
+    check("install.not_found_marker",
+          nf_info is None and nf_err is not None
+          and nf_err.startswith(ENGINE_NOT_FOUND), str(nf_err))
     bad(lambda o: o["model"].update(sha256="0" * 63), "short_model_sha")
     bad(lambda o: o["model"].pop("sha256"), "missing_model_sha")
     bad(lambda o: o["model"].update(format="onnx"), "bad_format")
@@ -1631,6 +2128,106 @@ def cmd_selftest(_args) -> int:
         check("audit.unavailable_fails_closed",
               not b.usable and b.lost > 0 and b.close() > 0)
 
+    # --- engine archive extraction: traversal rejection + binary_inside ---- #
+    check("tar.member_name_checks",
+          _tar_member_error("bin/llama-server") is None
+          and _tar_member_error("bin/./llama-server") is None
+          and _tar_member_error("/etc/shadow") == "absolute member path"
+          and _tar_member_error("../evil") == "'..' path part"
+          and _tar_member_error("a/../../evil") == "'..' path part"
+          and _tar_member_error("") == "absolute member path")
+    with tempfile.TemporaryDirectory(prefix="bicameral-selftest-tar-") as td:
+        def _member(tf_arc, name, data=b"x", type=tarfile.REGTYPE,
+                    linkname="", mode=0o644):
+            ti = tarfile.TarInfo(name)
+            ti.size = len(data) if type == tarfile.REGTYPE else 0
+            ti.type = type
+            ti.linkname = linkname
+            ti.mode = mode
+            tf_arc.addfile(ti, io.BytesIO(data) if type == tarfile.REGTYPE
+                           else None)
+
+        def _mk_tar(path, member_fn):
+            with tarfile.open(path, "w:gz") as arc:
+                member_fn(arc)
+
+        def _good_members(arc):
+            _member(arc, "pkg/", type=tarfile.DIRTYPE, mode=0o755)
+            _member(arc, "pkg/bin/", type=tarfile.DIRTYPE, mode=0o755)
+            _member(arc, "pkg/bin/llama-server", b"#!/bin/sh\nexit 0\n",
+                    mode=0o644)
+            _member(arc, "pkg/README", b"hi\n")
+
+        good_tgz = os.path.join(td, "good.tgz")
+        _mk_tar(good_tgz, _good_members)
+        dest = os.path.join(td, "dest-good")
+        total, members = extract_engine_tgz(good_tgz, dest, 1)
+        placed = os.path.join(dest, "bin", "llama-server")
+        check("tar.extract_strip_and_bytes",
+              total == 20 and members == 3                # "pkg/" stripped away
+              and open(placed, "rb").read() == b"#!/bin/sh\nexit 0\n",
+              "total=%s members=%s" % (total, members))
+
+        def _reject_case(label, member_fn, outside="evil.txt"):
+            tgz = os.path.join(td, "bad-%s.tgz" % label)
+            _mk_tar(tgz, member_fn)
+            d = os.path.join(td, "dest-%s" % label)
+            escaped_out = os.path.join(td, outside)
+            if os.path.lexists(escaped_out):
+                os.remove(escaped_out)
+            raised = None
+            try:
+                extract_engine_tgz(tgz, d, 0)
+            except InstallError as e:
+                raised = e
+            check("tar.rejects_%s" % label,
+                  raised is not None and raised.step == "engine"
+                  and not os.path.lexists(escaped_out),
+                  str(raised))
+
+        _reject_case("dotdot_member",
+                     lambda arc: _member(arc, "../evil.txt", b"nope"))
+        _reject_case("deep_dotdot_member",
+                     lambda arc: _member(arc, "a/../../evil.txt", b"nope"))
+        _reject_case("abs_member",
+                     lambda arc: _member(arc, "/abs/evil.txt", b"nope"),
+                     outside="abs")
+        _reject_case("symlink_escape",
+                     lambda arc: _member(arc, "link", type=tarfile.SYMTYPE,
+                                         linkname="../../outside"),
+                     outside="outside")
+        _reject_case("symlink_then_write",
+                     lambda arc: (_member(arc, "out", type=tarfile.DIRTYPE),
+                                  _member(arc, "out_link", type=tarfile.SYMTYPE,
+                                          linkname="../.."),
+                                  _member(arc, "out_link/evil.txt", b"nope")))
+        _reject_case("abs_link",
+                     lambda arc: _member(arc, "link", type=tarfile.SYMTYPE,
+                                         linkname="/etc"))
+        _reject_case("fifo_member",
+                     lambda arc: _member(arc, "f", type=tarfile.FIFOTYPE))
+
+        # binary_inside resolution: explicit, unique-search, ambiguous, missing
+        loc = _locate_engine_binary(dest, "bin/llama-server",
+                                    ("llama-server",))
+        check("tar.locate_explicit", loc == placed, loc)
+        check("tar.locate_search_unique",
+              _locate_engine_binary(dest, None, ("llama-server",)) == placed)
+        os.rename(placed, os.path.join(dest, "bin", "llama-server2"))
+        try:
+            _locate_engine_binary(dest, None, ("llama-server",))
+            check("tar.locate_missing_fails", False, "accepted")
+        except InstallError as e:
+            check("tar.locate_missing_fails", e.step == "engine")
+        os.rename(os.path.join(dest, "bin", "llama-server2"), placed)
+        os.makedirs(os.path.join(dest, "sbin"), exist_ok=True)
+        open(os.path.join(dest, "sbin", "llama-server"), "wb").close()
+        try:
+            _locate_engine_binary(dest, None, ("llama-server",))
+            check("tar.locate_ambiguous_fails", False, "accepted")
+        except InstallError as e:
+            check("tar.locate_ambiguous_fails", e.step == "engine")
+
     # shipped examples must validate (the bad sha is a runtime VERIFY_FAIL,
     # not a schema error — schema sees 64 hex and accepts)
     here = os.path.dirname(os.path.abspath(__file__))
@@ -1647,6 +2244,18 @@ def cmd_selftest(_args) -> int:
         if s:
             check("examples.badsha_differs_only_in_sha",
                   s["model"]["sha256"] != (json.load(open(ex))["model"]["sha256"]))
+    inst_ex = os.path.join(here, "..", "examples", "appspec-engine-install.json")
+    if os.path.isfile(inst_ex):
+        with open(inst_ex, "r", encoding="utf-8") as f:
+            s, e = validate_appspec(json.load(f))
+        check("examples.engine_install_valid", s is not None and e is None,
+              e or "")
+        if s:
+            check("examples.engine_install_shape",
+                  s["engine"].get("install", {}).get("format") == "tgz"
+                  and s["engine"]["install"].get("binary_inside")
+                  and s["model"]["sha256"].startswith("9465e63a"),
+                  str(s["engine"].get("install")))
 
     print("selftest: %d failure(s)" % len(failures))
     return 1 if failures else 0

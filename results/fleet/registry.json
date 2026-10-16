@@ -1,0 +1,17 @@
+{
+  "devices": {
+    "bi150": {
+      "last_report_path": "/home/nvidia/code/Bicameral/results/fleet/reports/bi150.json",
+      "last_seen_ts": 1792120343.918,
+      "report_sha256_16": "d2d29568b02ced9d"
+    },
+    "jetson": {
+      "last_report_path": "/home/nvidia/code/Bicameral/results/fleet/reports/jetson.json",
+      "last_seen_ts": 1792120337.221,
+      "report_sha256_16": "e6a19117f9fadcbd"
+    }
+  },
+  "manifest_sha256_16": "5301590b7098ba24",
+  "schema": "fleet-registry/1",
+  "updated_ts": 1792120343.918
+}

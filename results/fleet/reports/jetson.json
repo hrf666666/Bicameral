@@ -1,0 +1,741 @@
+{
+  "schema": "probe/1",
+  "generated_at": "2026-10-16T03:12:17Z",
+  "probe": {
+    "path": "/home/nvidia/code/Bicameral/bicameral/probe.py",
+    "sha256_16": "a2ce9db92eff2fb7",
+    "args": {
+      "no_egress": false,
+      "verify_hashes": false,
+      "model_dirs": []
+    }
+  },
+  "fingerprint": {
+    "machine_id": "5dbfb12414a3456d9014d88183e338b1",
+    "probe_sha256_16": "a2ce9db92eff2fb7",
+    "fingerprint_id": "5dbfb12414a3456d9014d88183e338b1-a2ce9db92eff2fb7"
+  },
+  "hardware": {
+    "host": {
+      "hostname": "nvidia-desktop",
+      "arch": "aarch64",
+      "cpu_model": "ARMv8 Processor rev 1 (v8l)",
+      "cpu_cores": 8,
+      "mem_total_bytes": 16415965184,
+      "mem_total_human": "15.3GiB"
+    },
+    "platform": "jetson",
+    "tegra_release": "# R36 (release), REVISION: 4.3, GCID: 38968081, BOARD: generic, EABI: aarch64, DATE: Wed Jan  8 01:49:37 UTC 2025",
+    "unified_memory": {
+      "value": true,
+      "evidence": "/etc/nv_tegra_release present (Tegra iGPU shares system DRAM); nvidia-smi memory.total=N/A (name, driver_version, compute_cap, memory.total [MiB]\nOrin (nvgpu), 540.4.0, 8.7, [N/A])"
+    },
+    "accelerators": [
+      {
+        "vendor_key": "NVIDIA",
+        "display": "NVIDIA",
+        "evidence": {
+          "dev_nodes": {
+            "dev_nodes": [
+              "/dev/nvidia-modeset",
+              "/dev/nvidia0",
+              "/dev/nvidiactl"
+            ],
+            "device_instances": 1
+          },
+          "lspci": [
+            {
+              "slot": "0001:00:00.0",
+              "vendor_key": "NVIDIA",
+              "vendor": "NVIDIA",
+              "vendor_id": "10de",
+              "device_id": "229e",
+              "line": "0001:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229e] (rev a1)"
+            },
+            {
+              "slot": "0004:00:00.0",
+              "vendor_key": "NVIDIA",
+              "vendor": "NVIDIA",
+              "vendor_id": "10de",
+              "device_id": "229c",
+              "line": "0004:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+            },
+            {
+              "slot": "0008:00:00.0",
+              "vendor_key": "NVIDIA",
+              "vendor": "NVIDIA",
+              "vendor_id": "10de",
+              "device_id": "229c",
+              "line": "0008:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+            }
+          ],
+          "tools": [
+            {
+              "tool": "nvidia-smi",
+              "path": "/usr/local/bin/nvidia-smi",
+              "gpu_query_csv": "name, driver_version, compute_cap, memory.total [MiB]\nOrin (nvgpu), 540.4.0, 8.7, [N/A]"
+            }
+          ]
+        }
+      },
+      {
+        "vendor_key": "DRM-generic",
+        "display": "DRM-generic",
+        "evidence": {
+          "dev_nodes": {
+            "dev_nodes": [
+              "/dev/dri/card0",
+              "/dev/dri/card1",
+              "/dev/dri/renderD128",
+              "/dev/dri/renderD129"
+            ],
+            "device_instances": 4
+          }
+        }
+      }
+    ],
+    "accel_enumeration_order": [
+      "/dev node scan",
+      "lspci vendor table",
+      "vendor tools"
+    ],
+    "dev_nodes_by_vendor": {
+      "NVIDIA": {
+        "dev_nodes": [
+          "/dev/nvidia-modeset",
+          "/dev/nvidia0",
+          "/dev/nvidiactl"
+        ],
+        "device_instances": 1
+      },
+      "DRM-generic": {
+        "dev_nodes": [
+          "/dev/dri/card0",
+          "/dev/dri/card1",
+          "/dev/dri/renderD128",
+          "/dev/dri/renderD129"
+        ],
+        "device_instances": 4
+      }
+    },
+    "lspci": {
+      "tool": "lspci",
+      "status": "present",
+      "vendor_table": {
+        "10de": "NVIDIA",
+        "1e3e": "Iluvatar / 天数智芯",
+        "19e5": "Huawei Ascend / 昇腾",
+        "1002": "AMD / Hygon 海光",
+        "126f": "Moore Threads / 摩尔线程"
+      },
+      "matches": [
+        {
+          "slot": "0001:00:00.0",
+          "vendor_key": "NVIDIA",
+          "vendor": "NVIDIA",
+          "vendor_id": "10de",
+          "device_id": "229e",
+          "line": "0001:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229e] (rev a1)"
+        },
+        {
+          "slot": "0004:00:00.0",
+          "vendor_key": "NVIDIA",
+          "vendor": "NVIDIA",
+          "vendor_id": "10de",
+          "device_id": "229c",
+          "line": "0004:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+        },
+        {
+          "slot": "0008:00:00.0",
+          "vendor_key": "NVIDIA",
+          "vendor": "NVIDIA",
+          "vendor_id": "10de",
+          "device_id": "229c",
+          "line": "0008:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)"
+        }
+      ]
+    },
+    "vendor_tools": [
+      {
+        "tool": "nvidia-smi",
+        "vendor": "NVIDIA",
+        "status": "present",
+        "path": "/usr/local/bin/nvidia-smi",
+        "source": "PATH",
+        "run": {
+          "status": "ok",
+          "code": 0,
+          "output": "Fri Oct 16 11:12:06 2026       \n+---------------------------------------------------------------------------------------+\n| NVIDIA-SMI 540.4.0                Driver Version: 540.4.0      CUDA Version: 12.6     |\n|-----------------------------------------+----------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |\n|                                         |                      |               MIG M. |\n…"
+        },
+        "gpu_query_csv": "name, driver_version, compute_cap, memory.total [MiB]\nOrin (nvgpu), 540.4.0, 8.7, [N/A]",
+        "gpu_query_fields": "name,driver_version,compute_cap,memory.total"
+      },
+      {
+        "tool": "tegrastats",
+        "vendor": "NVIDIA platform",
+        "status": "present",
+        "path": "/usr/bin/tegrastats",
+        "source": "PATH",
+        "run": {
+          "status": "timeout",
+          "error": "timeout after 5s (streaming tool?)",
+          "output": "10-16-2026 11:12:07 RAM 5917/15655MB (lfb 253x4MB) SWAP 866/7828MB (cached 1MB) CPU [42%@1984,30%@1984,22%@1984,38%@1984,12%@1984,0%@1984,0%@1984,0%@1984] GR3D_FREQ 0% cv0@47.25C cpu@51.343C soc2@46.0\n10-16-2026 11:12:08 RAM 5917/15655MB (lfb 253x4MB) SWAP 866/7828MB (cached 1MB) CPU [73%@1984,0%@1984,10%@1984,0%@1984,7%@1984,44%@1984,0%@1984,1%@1984] GR3D_FREQ 0% cv0@47.312C cpu@51.281C soc2@46.03\n…"
+        }
+      },
+      {
+        "tool": "jetson_clocks",
+        "vendor": "NVIDIA platform",
+        "status": "present",
+        "path": "/usr/bin/jetson_clocks",
+        "source": "PATH",
+        "run": {
+          "status": "nonzero",
+          "code": 1,
+          "output": "Error: Run this script(/usr/bin/jetson_clocks) as a root user"
+        }
+      },
+      {
+        "tool": "ixsmi",
+        "vendor": "Iluvatar",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "npu-smi",
+        "vendor": "Ascend",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "rocm-smi",
+        "vendor": "AMD-Hygon",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "hy-smi",
+        "vendor": "AMD-Hygon",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "musa-smi",
+        "vendor": "Moore-Threads",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "mthreads-gmi",
+        "vendor": "Moore-Threads",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      }
+    ]
+  },
+  "stack": {
+    "os": {
+      "pretty_name": "Ubuntu 22.04.5 LTS",
+      "version_id": "22.04",
+      "id": "ubuntu"
+    },
+    "kernel": "5.15.148-tegra",
+    "container": {
+      "dot_dockerenv": false,
+      "dot_containerenv": false,
+      "cgroup_hits": [],
+      "kubernetes_env": false,
+      "is_container": false
+    },
+    "runtimes": {
+      "cuda": {
+        "status": "present",
+        "nvcc": "/usr/local/cuda/bin/nvcc",
+        "source": "/usr/local/cuda/bin",
+        "version": "12.6",
+        "nvcc_full": "12.6.68",
+        "probe": null
+      },
+      "nvidia_smi_reported": {
+        "name": "Orin (nvgpu)",
+        "driver_version": "540.4.0",
+        "compute_cap": "8.7",
+        "memory_total": "[N/A]"
+      },
+      "rocm": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/rocm*/.info/version",
+          "/opt/rocm*/.info/version"
+        ]
+      },
+      "cann": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/[Aa]scend/ascend-toolkit/latest/version.cfg",
+          "/usr/local/[Aa]scend/nnal/atb/latest/version.cfg",
+          "/usr/local/[Aa]scend/aascend-toolkit/latest/version.cfg"
+        ]
+      },
+      "corex": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/corex*/version",
+          "/usr/local/corex*/version.*",
+          "/usr/local/corex*/release-corex.txt"
+        ]
+      }
+    },
+    "python": {
+      "version": "3.11.14",
+      "executable": "/home/nvidia/miniconda3/bin/python3",
+      "venv_importable": true,
+      "ensurepip_importable": true
+    },
+    "egress": {
+      "targets": {
+        "github_ssh_443": {
+          "status": "up",
+          "latency_ms": 100
+        },
+        "hf_mirror": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 457
+        },
+        "pypi": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 545
+        },
+        "github": {
+          "status": "down",
+          "error": "URLError: <urlopen error timed out>",
+          "latency_ms": 5187
+        },
+        "hf": {
+          "status": "down",
+          "error": "URLError: <urlopen error [Errno 101] Network is unreachable>",
+          "latency_ms": 5216
+        }
+      },
+      "summary": "pypi:up hf:down hf_mirror:up github:down github_ssh_443:up"
+    }
+  },
+  "installed": {
+    "engines": [
+      {
+        "name": "llama-server",
+        "status": "absent",
+        "searched_dir_count": 17
+      },
+      {
+        "name": "vllm",
+        "status": "absent",
+        "searched_dir_count": 17,
+        "python_package_version": null
+      },
+      {
+        "name": "strata",
+        "status": "absent",
+        "searched_dir_count": 17
+      }
+    ],
+    "models": {
+      "roots_considered": [
+        {
+          "path": "/home/nvidia/models",
+          "exists": true,
+          "origin": "convention"
+        },
+        {
+          "path": "/data/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/opt/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/mnt/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/srv/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/workspace/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/home/nvidia/.cache/huggingface/hub",
+          "exists": true,
+          "origin": "convention"
+        },
+        {
+          "path": "/home/nvidia/.cache/lm-studio/models",
+          "exists": false,
+          "origin": "convention"
+        }
+      ],
+      "roots_scanned": [
+        "/home/nvidia/models",
+        "/home/nvidia/.cache/huggingface/hub"
+      ],
+      "count": 0,
+      "count_note": "complete",
+      "truncated": false,
+      "total_bytes": 0,
+      "total_human": "0.0B",
+      "by_format": {
+        "gguf": 0,
+        "safetensors": 0
+      },
+      "models": []
+    },
+    "services": {
+      "tool": "ss -tln",
+      "listener_count": 11,
+      "truncated": false,
+      "listeners": [
+        {
+          "port": 22,
+          "addrs": [
+            "0.0.0.0",
+            "[::]"
+          ]
+        },
+        {
+          "port": 53,
+          "addrs": [
+            "127.0.0.53%lo"
+          ]
+        },
+        {
+          "port": 111,
+          "addrs": [
+            "0.0.0.0",
+            "[::]"
+          ]
+        },
+        {
+          "port": 631,
+          "addrs": [
+            "0.0.0.0",
+            "[::]"
+          ]
+        },
+        {
+          "port": 5000,
+          "addrs": [
+            "*"
+          ]
+        },
+        {
+          "port": 18000,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 18001,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 18100,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 18101,
+          "addrs": [
+            "0.0.0.0"
+          ]
+        },
+        {
+          "port": 18888,
+          "addrs": [
+            "127.0.0.1"
+          ]
+        },
+        {
+          "port": 34063,
+          "addrs": [
+            "127.0.0.1"
+          ]
+        }
+      ],
+      "cross_check": [
+        {
+          "port": 22,
+          "listen_addrs": [
+            "0.0.0.0",
+            "[::]"
+          ],
+          "health": {
+            "http_status": null,
+            "host": "::1",
+            "error": "BadStatusLine: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.13\r\n"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": null,
+            "host": "::1",
+            "model_ids": [],
+            "error": "BadStatusLine: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.13\r\n"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 53,
+          "listen_addrs": [
+            "127.0.0.53%lo"
+          ],
+          "health": {
+            "http_status": null,
+            "host": "127.0.0.1",
+            "error": "URLError: <urlopen error [Errno 111] Connection refused>"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": null,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "URLError: <urlopen error [Errno 111] Connection refused>"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 111,
+          "listen_addrs": [
+            "0.0.0.0",
+            "[::]"
+          ],
+          "health": {
+            "http_status": null,
+            "host": "::1",
+            "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": null,
+            "host": "::1",
+            "model_ids": [],
+            "error": "ConnectionResetError: [Errno 104] Connection reset by peer"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 631,
+          "listen_addrs": [
+            "0.0.0.0",
+            "[::]"
+          ],
+          "health": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "error": "endpoint answered with HTTP error"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 5000,
+          "listen_addrs": [
+            "*"
+          ],
+          "health": {
+            "http_status": 426,
+            "host": "127.0.0.1",
+            "error": "endpoint answered with HTTP error"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 426,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 18000,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "error": "endpoint answered with HTTP error"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 18001,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "error": "endpoint answered with HTTP error"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 18100,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "error": "endpoint answered with HTTP error"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 18101,
+          "listen_addrs": [
+            "0.0.0.0"
+          ],
+          "health": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "error": "endpoint answered with HTTP error"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        },
+        {
+          "port": 18888,
+          "listen_addrs": [
+            "127.0.0.1"
+          ],
+          "health": {
+            "http_status": 200,
+            "host": "127.0.0.1",
+            "error": null,
+            "body_excerpt": "{\"status\":\"ok\"}"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 200,
+            "host": "127.0.0.1",
+            "model_ids": [
+              "/home/nvidia/code/strata-jetson/work/zoo/gguf/Qwen3-0.6B-Q8_0.gguf"
+            ],
+            "error": null
+          },
+          "inference_server": true
+        },
+        {
+          "port": 34063,
+          "listen_addrs": [
+            "127.0.0.1"
+          ],
+          "health": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "error": "endpoint answered with HTTP error"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 404,
+            "host": "127.0.0.1",
+            "model_ids": [],
+            "error": "endpoint answered with HTTP error"
+          },
+          "inference_server": false
+        }
+      ],
+      "inference_services": [
+        {
+          "port": 18888,
+          "listen_addrs": [
+            "127.0.0.1"
+          ],
+          "health": {
+            "http_status": 200,
+            "host": "127.0.0.1",
+            "error": null,
+            "body_excerpt": "{\"status\":\"ok\"}"
+          },
+          "health_probes": {},
+          "v1_models": {
+            "http_status": 200,
+            "host": "127.0.0.1",
+            "model_ids": [
+              "/home/nvidia/code/strata-jetson/work/zoo/gguf/Qwen3-0.6B-Q8_0.gguf"
+            ],
+            "error": null
+          },
+          "inference_server": true
+        }
+      ],
+      "note": "each listening port cross-checked with GET /health and GET /v1/models (§3.1 #3)"
+    }
+  },
+  "install_state": [],
+  "notes": [
+    "no --appspec supplied (standalone run): install_state is defined against master-issued appspec/1, reported as []"
+  ]
+}

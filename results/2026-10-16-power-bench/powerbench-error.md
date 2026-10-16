@@ -1,0 +1,15 @@
+# powerbench 实测失败记录（bi150，2026-10-16）
+
+- **base**: `http://127.0.0.1:8960`
+- **失败类别**: unreachable
+- **细节**: both GET /health and GET /v1/models failed (transport): health=URLError: <urlopen error [Errno 111] Connection refused> models=URLError: <urlopen error [Errno 111] Connection refused>
+- **探针证据**: {"health": {"status": null, "server_header": null, "body_head": "URLError: <urlopen error [Errno 111] Connection refused>"}, "v1_models": {"status": null, "server_header": null, "body_head": "URLError: <urlopen error [Errno 111] Connection refused>"}}
+
+- 远程失败（8960 不可达等）如实返回 error，不修饰；未发送任何 chat 请求，在跑服务零触碰（红线：绝不重启/改配置）
+- 实测时点（2026-10-16T10:5xZ）8960-8963 均未监听：ss 与 /proc/net/tcp 双重确认，本 netns 监听集仅 22/8080/8181/18000/18001
+- llama-server/llama-cli 进程仅剩 <defunct>（Oct10-11 遗留）；2026-10-14 probe 记录的同 pod 兄弟容器 Qwen3.8-27B 服务（8960-8962，/private/models/Qwen3.8-27B-UD-Q4_K_M.gguf）已不在跑；按红线未做任何重启/拉起
+- 功耗采样链路本会话已真机验证可用：ixsmi --query-gpu=gpu.power.draw --format=csv 出数正常（8× BI-V150，空闲 37-46 W）；规格字面的 power.draw 字段被该 ixsmi 拒绝；8960 服务恢复后可直接复跑本脚本关闭缺口
+- 按约定如实记 error：8960 不可达等远程失败不修饰、不重试补测、不产出 bench/1 实测数字
+
+按约定如实记 error，不修饰、不补测、不编造。
+
