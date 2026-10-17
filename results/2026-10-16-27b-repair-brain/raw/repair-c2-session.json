@@ -1,0 +1,72 @@
+{
+  "schema": "repair-session/1",
+  "app": "qwen3-0.6b-q8_0-m2",
+  "llm": "http://127.0.0.1:8960/v1",
+  "model": "qwen3.8-27b",
+  "max_rounds": 4,
+  "rounds": [
+    {
+      "round": 1,
+      "phase": "plan",
+      "mode": "json_schema",
+      "elapsed_s": 70.1,
+      "diagnosis": "当前 appspec 配置的镜像源列表失效：首位本地代理 (127.0.0.1:18099) 返回 HTTP 500，次位官方源 (huggingface.co) 因网络不可达 (Errno 101) 失败。环境事实显示 egress 中 hf_mirror 状态为 up，而 hf 为 down，说明应使用 hf-mirror.com 作为可用镜像源。",
+      "action": {
+        "type": "adjust_appspec",
+        "field": "model.mirror_urls",
+        "mirror_urls": [
+          "https://hf-mirror.com"
+        ]
+      },
+      "outcome": {
+        "status": "ok",
+        "field": "model.mirror_urls",
+        "old": {
+          "model.mirror_urls": [
+            "http://127.0.0.1:18099",
+            "https://huggingface.co"
+          ]
+        },
+        "new": {
+          "model.mirror_urls": [
+            "https://hf-mirror.com"
+          ]
+        },
+        "work_appspec": "/root/bicameral-sandbox/repair/qwen3-0.6b-q8_0-m2.repair-appspec.json"
+      },
+      "verify": {
+        "ok": true,
+        "rc": 0,
+        "marker_state": "ready",
+        "error": null
+      }
+    }
+  ],
+  "started_at": "2026-10-17T01:52:02Z",
+  "entry_check": {
+    "ok": false,
+    "rc": 3,
+    "marker_state": null,
+    "error": "DOWNLOAD fail mirror=1 url=http://127.0.0.1:18099/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf error=HTTPError: HTTP Error 500: Internal Server Error | DOWNLOAD fail mirror=1 url=http://127.0.0.1:18099/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf error=HTTPError: HTTP Error 500: Internal Server Error | DOWNLOAD fail mirror=2 url=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf error=URLError: <urlopen error [Errno 101] Network is unreachable> | DOWNLOAD fail mirror=2 url=https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf error=URLError: <urlopen error [Errno 101] Network is unreachable> | INSTALL_FAIL step=download: all mirrors exhausted (last: URLError: <urlopen error [Errno 101] Network is unreachable>)"
+  },
+  "final": {
+    "report": "REPAIR_REPAIRED",
+    "schema": "repair/1",
+    "app": "qwen3-0.6b-q8_0-m2",
+    "rounds": 1,
+    "final_action": {
+      "type": "adjust_appspec",
+      "field": "model.mirror_urls",
+      "mirror_urls": [
+        "https://hf-mirror.com"
+      ]
+    },
+    "install_state": "ready",
+    "port": 18010,
+    "verify": {
+      "ok": true,
+      "rc": 0
+    }
+  },
+  "finished_at": "2026-10-17T01:57:03Z"
+}

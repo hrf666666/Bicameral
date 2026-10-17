@@ -1,0 +1,41 @@
+{
+  "report": "REPAIR_FAILED",
+  "schema": "repair/1",
+  "app": "qwen3-0.6b-q8_0",
+  "reason": "round_budget_exhausted",
+  "rounds": 4,
+  "phenomenon": "HEALTH proc_exited=True returncode=1 http_status=None timed_out=None | INSTALL_FAIL step=health: no HTTP 200 on /health within 180.0s",
+  "rounds_evidence": [
+    {
+      "round": 0,
+      "kind": "entry_check",
+      "ok": false,
+      "error": "HEALTH proc_exited=True returncode=1 http_status=None timed_out=None | INSTALL_FAIL step=health: no HTTP 200 on /health within 180.0s"
+    },
+    {
+      "round": 1,
+      "kind": "invalid_llm_output",
+      "error": "plan must be a JSON object",
+      "raw_excerpt": ""
+    },
+    {
+      "round": 2,
+      "kind": "invalid_llm_output",
+      "error": "plan must be a JSON object",
+      "raw_excerpt": "{\"diagnosis\":\"18010 端口已被占用，llama-server 启动后绑定失败并立即退出，导致 /health 无法返回 200\",\"action\":{\"type\":\"adjust_appspec\",\"field\":\"service.port\",\"port\":18011},\"rationale\":\"port_checks 显示 18010 busy 且 18011 free；将服务"
+    },
+    {
+      "round": 3,
+      "kind": "invalid_llm_output",
+      "error": "plan must be a JSON object",
+      "raw_excerpt": ""
+    },
+    {
+      "round": 4,
+      "kind": "invalid_llm_output",
+      "error": "plan must be a JSON object",
+      "raw_excerpt": ""
+    }
+  ],
+  "human_actions": "读 <sandbox>/repair/repair-audit.jsonl 与本报告 rounds_evidence；人工修复后可重跑 repair.py（apply 幂等）"
+}

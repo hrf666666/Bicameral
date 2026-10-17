@@ -1,0 +1,19 @@
+{
+  "report": "REPAIR_REPAIRED",
+  "schema": "repair/1",
+  "app": "qwen3-0.6b-q8_0-m2",
+  "rounds": 1,
+  "final_action": {
+    "type": "adjust_appspec",
+    "field": "model.mirror_urls",
+    "mirror_urls": [
+      "https://hf-mirror.com"
+    ]
+  },
+  "install_state": "ready",
+  "port": 18010,
+  "verify": {
+    "ok": true,
+    "rc": 0
+  }
+}

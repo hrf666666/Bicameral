@@ -204,3 +204,20 @@
 | 自检 | `selfcheck` 7 项（健康/模型表/真实推理/healthz/审计可写/D3 重放/D10 预算），FAIL 必带诊断建议；bootstrap 结果以 selfcheck 为准（ready / ready_degraded exit 4） | 7/7 PASS；注入死端口 → exit 4 + 逐项 FAIL+建议 |
 
 **自治的边界（同样显式）**：bootstrap 全程 flock 单实例；apt 包名与删除操作走常量白名单与 path_inside 门（root 永不删）；规则表覆盖有静态钉（逐规则 `action ==` 比较行 + 规划器反向断言）；源码通道强制 sha256 pin、clone 记 resolved commit；同规则双败无进展即升级。评审 1 HIGH + 4 MEDIUM + 3 LOW 全部修复，selftest 117 项 0 失败，bi100 正例（READY exit 0）与注入反例（exit 3/4）双验证。
+
+
+---
+
+## 11. 模型驱动自治层（2026-10-16 当日第三批）
+
+规则引擎是快路径（免费、确定性）；**未知名失败升级给 LLM 修复脑**——zcode workflow 模式四要件嫁接：类型化规划（LLM 输出是数据非指令，json_schema 约束+校验）、策略门（harness 执行：白名单字段/沙箱/审计，拒绝原因回喂下轮）、有界轮（max-rounds + 逐轮重跑失败探针）、升级而非静默（REPAIR_FAILED 全程存档）。
+
+**诊断脑**：bi150 主控自部署 Qwen3.8-27B（CoreX 二进制 CPU 模式 t56：eval 5.21 tok/s，比 t16 +29%；4 卡 GPU 被二进制阻断——平台 llama.cpp 编译未含 GPU offload，卡本身已是 32GB 整卡，向平台申请 CoreX 调优分支后可解锁）。
+
+**双案例实证（27B 脑 vs bi100 1.7B 脑对照）**：
+| 案例 | 27B（t56） | 1.7B（对照） |
+|---|---|---|
+| 端口被未知进程占用 | **1 轮命中**：引用 port_checks busy/free 证据 → 白名单内 port 18010→18011 → READY（52s） | 1 轮修复但诊断为笼统「未归类失败」 |
+| mirror1 500 + mirror2 不可达 | **1 轮命中**：识别 500/Errno101/egress 三证据 → 重排 mirror_urls → 639MB 下载 → READY（70.1s） | 未测 |
+代价：27B 每轮 52-70s（1.7B 19.4s）。**高价值回流**：Qwen3.8 推理模板 × json_schema 互斥——token 预算全进 reasoning_content、content 恒空，canonical repair.py 4 轮全废；SYSTEM_PROMPT 加 `/no_think` 一行修复（已回流，selftest 0 失败；部署侧等价方案 `--reasoning-format none`）。
+证据：`results/2026-10-16-27b-repair-brain/`（README + raw/ 28 件，双审计 JSONL 全链）。

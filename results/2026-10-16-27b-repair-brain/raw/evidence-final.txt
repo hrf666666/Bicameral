@@ -1,0 +1,12 @@
+=== final verification snapshot 2026-10-17T09:57:55+08:00
+--- ss 18010/18011/18099:
+LISTEN 0      5          127.0.0.1:18099      0.0.0.0:*    users:(("python3",pid=34209,fd=3))     
+LISTEN 0      512        127.0.0.1:18010      0.0.0.0:*    users:(("llama-server",pid=34331,fd=3))
+LISTEN 0      512        127.0.0.1:18011      0.0.0.0:*    users:(("llama-server",pid=34001,fd=3))
+--- case1 (18011):
+health=200
+{"models":[{"name":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","model":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3
+--- case2 (18010):
+health=200
+{"models":[{"name":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0-m2/models/Qwen3-0.6B-Q8_0.gguf","model":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0-m2/models
+--- repair-audit REPAIR_OK/REPAIR_FAILED events:

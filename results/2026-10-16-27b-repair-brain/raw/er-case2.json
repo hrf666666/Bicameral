@@ -1,0 +1,14 @@
+{
+  "report": "DIAGNOSIS_REPORT",
+  "schema": "nodeagent/1",
+  "app": "qwen3-0.6b-q8_0-m2",
+  "rounds": 2,
+  "phenomenon": "install.py apply: INSTALL_FAIL step=download exit_code=3: all mirrors exhausted (last: URLError: <urlopen error [Errno 101] Network is unreachable>) | DOWNLOAD fail mirror=1 attempt=1..2 url=http://127.0.0.1:18099/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf error=HTTPError: HTTP Error 500: Internal Server Error | DOWNLOAD fail mirror=2 attempt=1..2 url=https://huggingface.co/... error=URLError: [Errno 101] Network is unreachable | ROLLBACK reason=failed:download removed_dir=true",
+  "error_class": "unknown",
+  "actions_tried": [
+    {"round": 1, "rule": "apply", "action": "install.py apply appspec-27b-c2.json --sandbox-root /root/bicameral-sandbox", "outcome": {"status": "fail", "error": "INSTALL_FAIL step=download: all mirrors exhausted (mirror1 HTTP 500, mirror2 Errno 101)"}},
+    {"round": 2, "rule": "retry_apply", "action": "install.py apply (idempotent retry)", "outcome": {"status": "fail", "error": "same download exhaustion"}}
+  ],
+  "root_cause_hypothesis": "规则表穷尽（error_class=unknown）：model.mirror_urls 全部不可用——首位镜像 HTTP 500，次位镜像不可达",
+  "human_actions": "升级修复脑 repair.py（有界 LLM 自主修复）"
+}

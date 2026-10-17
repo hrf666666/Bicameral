@@ -1,0 +1,14 @@
+{
+  "report": "DIAGNOSIS_REPORT",
+  "schema": "nodeagent/1",
+  "app": "qwen3-0.6b-q8_0",
+  "rounds": 2,
+  "phenomenon": "install.py apply: INSTALL_FAIL step=health exit_code=4: no HTTP 200 on /health within 180s | HEALTH proc_exited=true returncode=1 attempts=2 (llama-server exited right after START on port 18010) | ROLLBACK reason=failed:health removed_dir=true state=absent",
+  "error_class": "unknown",
+  "actions_tried": [
+    {"round": 1, "rule": "apply", "action": "install.py apply appspec-27b-c1.json --sandbox-root /root/bicameral-sandbox", "outcome": {"status": "fail", "error": "INSTALL_FAIL step=health: no HTTP 200 on /health within 180s (HEALTH proc_exited=true returncode=1)"}},
+    {"round": 2, "rule": "retry_apply", "action": "install.py apply (idempotent retry)", "outcome": {"status": "fail", "error": "INSTALL_FAIL step=health, same phenomenon"}}
+  ],
+  "root_cause_hypothesis": "规则表穷尽（error_class=unknown）：服务进程 START 后立即退出（returncode=1），/health 从未 200",
+  "human_actions": "升级修复脑 repair.py（有界 LLM 自主修复）"
+}

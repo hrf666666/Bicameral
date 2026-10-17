@@ -1,0 +1,70 @@
+{
+  "schema": "nodeagent/1",
+  "generated_at": "2026-10-17T01:31:44Z",
+  "os_id": "ubuntu",
+  "os_version": "22.04",
+  "os_pretty": "Ubuntu 22.04.5 LTS",
+  "arch": "x86_64",
+  "glibc": "2.35",
+  "cores": 128,
+  "mem_gb": 503.8,
+  "toolchain": {
+    "gcc": {
+      "present": true,
+      "path": "/usr/bin/gcc",
+      "version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0"
+    },
+    "g++": {
+      "present": true,
+      "path": "/usr/bin/g++",
+      "version": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0"
+    },
+    "cmake": {
+      "present": true,
+      "path": "/usr/bin/cmake",
+      "version": "cmake version 3.22.1"
+    },
+    "make": {
+      "present": true,
+      "path": "/usr/bin/make",
+      "version": "GNU Make 4.3"
+    },
+    "git": {
+      "present": false,
+      "path": null,
+      "version": null
+    }
+  },
+  "pkg_mgr": {
+    "name": "apt",
+    "path": "/usr/bin/apt-get"
+  },
+  "egress": {
+    "pypi": "up",
+    "hf": "down",
+    "hf_mirror": "up",
+    "github_https": "up"
+  },
+  "engines": [
+    {
+      "name": "llama-server",
+      "status": "absent",
+      "version": null,
+      "sha256_16": null
+    },
+    {
+      "name": "vllm",
+      "status": "absent",
+      "version": null,
+      "sha256_16": null
+    },
+    {
+      "name": "strata",
+      "status": "absent",
+      "version": null,
+      "sha256_16": null
+    }
+  ],
+  "port_free": false,
+  "port": 18010
+}

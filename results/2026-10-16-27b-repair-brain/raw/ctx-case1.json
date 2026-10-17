@@ -1,0 +1,9 @@
+{
+  "host": "bi150",
+  "arch": "x86_64",
+  "os_id": "ubuntu",
+  "egress": {"hf_mirror": "up", "hf": "down"},
+  "appspec": "/root/bicameral/appspec-27b-c1.json",
+  "sandbox": "/root/bicameral-sandbox",
+  "note": "rule-engine escalation context; egress keys from sense snapshot"
+}

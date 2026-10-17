@@ -1,0 +1,33 @@
+{
+  "report": "DIAGNOSIS_REPORT",
+  "schema": "nodeagent/1",
+  "app": "repair-casea",
+  "rounds": 2,
+  "phenomenon": "no HTTP 200 on /health within 45.0s",
+  "error_class": "unknown",
+  "actions_tried": [
+    {
+      "round": 1,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "no HTTP 200 on /health within 45.0s",
+        "rc": 4
+      }
+    },
+    {
+      "round": 2,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "no HTTP 200 on /health within 45.0s",
+        "rc": 4
+      }
+    }
+  ],
+  "root_cause_hypothesis": "未归类失败",
+  "human_actions": "取 nodeagent-state.json 与 <sandbox>/audit.jsonl（install 侧）人工排查",
+  "escalation_reason": "no_progress: rule apply_install produced the identical failure twice in a row"
+}

@@ -1,0 +1,17 @@
+{
+  "report": "REPAIR_REPAIRED",
+  "schema": "repair/1",
+  "app": "qwen3-0.6b-q8_0",
+  "rounds": 1,
+  "final_action": {
+    "type": "adjust_appspec",
+    "field": "service.port",
+    "port": 18011
+  },
+  "install_state": "ready",
+  "port": 18011,
+  "verify": {
+    "ok": true,
+    "rc": 0
+  }
+}

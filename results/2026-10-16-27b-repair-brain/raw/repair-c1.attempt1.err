@@ -1,0 +1,34 @@
+install: {"ts":1792200631.606,"event":"REPAIR_START","app":"qwen3-0.6b-q8_0","llm":"http://127.0.0.1:8960/v1","model":"qwen3.8-27b","max_rounds":4,"sandbox":"/root/bicameral-sandbox","error_report_sha256_16":"85e0c25fa75f17b9","context_sha256_16":"0cb19abb03a7f25f","appspec_sha256_16":"5bb58ac155105396","work_appspec":"/root/bicameral-sandbox/repair/qwen3-0.6b-q8_0.repair-appspec.json","admin_token_given":false}
+repair: repair qwen3-0.6b-q8_0: llm=http://127.0.0.1:8960/v1 model=qwen3.8-27b rounds<=4
+install: {"ts":1792200631.607,"event":"INSTALL_START","app":"qwen3-0.6b-q8_0","appspec_sha256_16":"29b11dddc90c010b","dedup_key":"qwen3-0.6b-q8_0:9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031","sandbox":"/root/bicameral-sandbox"}
+install: {"ts":1792200631.607,"event":"ENGINE_FOUND","app":"qwen3-0.6b-q8_0","name":"llama.cpp","binary":"/root/bicameral-sandbox/llama.cpp/build-cpu/bin/llama-server","sha256_16":"e67aad9233268b61","note":"pin_matched omitted means no engine.sha256 pin; the fingerprint is recorded anyway (§5 安装目录指纹入审计)"}
+install: {"ts":1792200633.639,"event":"STATE","app":"qwen3-0.6b-q8_0","phase":"pre","state":"partial","missing":["model file not found: /root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","service on port 18010 not healthy"]}
+install: {"ts":1792200633.639,"event":"STATE","app":"qwen3-0.6b-q8_0","phase":"decision","action":"fresh","why":"no marker"}
+install: {"ts":1792200729.053,"event":"DOWNLOAD","app":"qwen3-0.6b-q8_0","status":"ok","mirror":1,"attempt":1,"url":"https://cas-bridge.xethub.hf.co/xet-bridge-us/681881ef3319aedbfd81dc51/18d608d38b934c86fc3f3a050157b2d4df8d12330de6d13af3ba201edd0e6539","bytes":639446688,"sha256_16":"9465e63a22add535"}
+install: {"ts":1792200729.053,"event":"VERIFY_OK","app":"qwen3-0.6b-q8_0","what":"model","sha256":"9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031","bytes":639446688}
+install: {"ts":1792200729.053,"event":"PLACE","app":"qwen3-0.6b-q8_0","path":"/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","bytes":639446688}
+install: {"ts":1792200729.054,"event":"START","app":"qwen3-0.6b-q8_0","pid":33178,"binary":"/root/bicameral-sandbox/llama.cpp/build-cpu/bin/llama-server","port":18010,"args":["-m","/root/bicameral-sandbox/apps/qwen3-0.6b-q8_0/models/Qwen3-0.6B-Q8_0.gguf","--host","127.0.0.1","--port","18010","-c","2048","-t","8"],"log":"service.log"}
+install: {"ts":1792200732.057,"event":"HEALTH","app":"qwen3-0.6b-q8_0","port":18010,"path":"/health","proc_exited":true,"returncode":1,"attempts":2,"elapsed_ms":3002}
+install: {"ts":1792200732.057,"event":"INSTALL_FAIL","app":"qwen3-0.6b-q8_0","step":"health","error":"no HTTP 200 on /health within 180.0s","exit_code":4}
+install: FAIL at health: no HTTP 200 on /health within 180.0s
+install: {"ts":1792200732.128,"event":"ROLLBACK","app":"qwen3-0.6b-q8_0","reason":"failed:health","killed_pid_outcome":"terminated","removed_dir":true,"state":"absent"}
+install: {"ts":1792200732.128,"event":"REPAIR_RESULT","app":"qwen3-0.6b-q8_0","ok":false,"rc":4,"error":"HEALTH proc_exited=True returncode=1 http_status=None timed_out=None | INSTALL_FAIL step=health: no HTTP 200 on /health within 180.0s"}
+repair: entry check reproduces the failure (rc=4)
+install: {"ts":1792200732.128,"event":"REPAIR_ROUND","phase":"llm_request","round":1,"model":"qwen3.8-27b","prompt_sha256_16":"75fd6d8ea19dac5c"}
+install: {"ts":1792200847.002,"event":"REPAIR_ROUND","phase":"llm_response","mode":"json_schema","attempt":1,"elapsed_s":114.9,"content_sha256_16":"e3b0c44298fc1c14","content_excerpt":""}
+install: {"ts":1792200847.002,"event":"REPAIR_ROUND","phase":"plan","round":1,"prompt_sha256_16":"75fd6d8ea19dac5c","response_sha256_16":"e3b0c44298fc1c14","mode":"json_schema","valid":false,"error":"plan must be a JSON object","elapsed_s":114.9}
+repair: round 1: invalid LLM output (plan must be a JSON object)
+install: {"ts":1792200847.003,"event":"REPAIR_ROUND","phase":"llm_request","round":2,"model":"qwen3.8-27b","prompt_sha256_16":"bf62daa37d5042af"}
+install: {"ts":1792200947.653,"event":"REPAIR_ROUND","phase":"llm_response","mode":"json_schema","attempt":1,"elapsed_s":100.7,"content_sha256_16":"926c4fbbb5398941","content_excerpt":"{\"diagnosis\":\"18010 端口已被占用，llama-server 启动后绑定失败并立即退出，导致 /health 无法返回 200\",\"action\":{\"type\":\"adjust_appspec\",\"field\":\"service.port\",\"port\":18011},\"rationale\":\"port_checks 显示 18010 busy 且 18011 free；将服务"}
+install: {"ts":1792200947.653,"event":"REPAIR_ROUND","phase":"plan","round":2,"prompt_sha256_16":"bf62daa37d5042af","response_sha256_16":"926c4fbbb5398941","mode":"json_schema","valid":false,"error":"plan must be a JSON object","elapsed_s":100.7}
+repair: round 2: invalid LLM output (plan must be a JSON object)
+install: {"ts":1792200947.654,"event":"REPAIR_ROUND","phase":"llm_request","round":3,"model":"qwen3.8-27b","prompt_sha256_16":"26a23582127569a8"}
+install: {"ts":1792201053.016,"event":"REPAIR_ROUND","phase":"llm_response","mode":"json_schema","attempt":1,"elapsed_s":105.4,"content_sha256_16":"e3b0c44298fc1c14","content_excerpt":""}
+install: {"ts":1792201053.016,"event":"REPAIR_ROUND","phase":"plan","round":3,"prompt_sha256_16":"26a23582127569a8","response_sha256_16":"e3b0c44298fc1c14","mode":"json_schema","valid":false,"error":"plan must be a JSON object","elapsed_s":105.4}
+repair: round 3: invalid LLM output (plan must be a JSON object)
+install: {"ts":1792201053.017,"event":"REPAIR_ROUND","phase":"llm_request","round":4,"model":"qwen3.8-27b","prompt_sha256_16":"192cbe22d76a1762"}
+install: {"ts":1792201157.324,"event":"REPAIR_ROUND","phase":"llm_response","mode":"json_schema","attempt":1,"elapsed_s":104.3,"content_sha256_16":"e3b0c44298fc1c14","content_excerpt":""}
+install: {"ts":1792201157.324,"event":"REPAIR_ROUND","phase":"plan","round":4,"prompt_sha256_16":"192cbe22d76a1762","response_sha256_16":"e3b0c44298fc1c14","mode":"json_schema","valid":false,"error":"plan must be a JSON object","elapsed_s":104.3}
+repair: round 4: invalid LLM output (plan must be a JSON object)
+install: {"ts":1792201157.324,"event":"REPAIR_FAILED","app":"qwen3-0.6b-q8_0","reason":"round_budget_exhausted","rounds":4,"error":"HEALTH proc_exited=True returncode=1 http_status=None timed_out=None | INSTALL_FAIL step=health: no HTTP 200 on /health within 180.0s"}
+repair: session written to /root/bicameral/repair-c1-session.json

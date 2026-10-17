@@ -1,0 +1,63 @@
+{
+  "schema": "repair-session/1",
+  "app": "qwen3-0.6b-q8_0",
+  "llm": "http://127.0.0.1:8960/v1",
+  "model": "qwen3.8-27b",
+  "max_rounds": 4,
+  "rounds": [
+    {
+      "round": 1,
+      "phase": "plan",
+      "mode": "json_schema",
+      "elapsed_s": 52.0,
+      "diagnosis": "appspec.service.port 18010 被占用（busy），导致 llama-server 启动失败或健康检查无法通过；端口 18011 空闲（free）。",
+      "action": {
+        "type": "adjust_appspec",
+        "field": "service.port",
+        "port": 18011
+      },
+      "outcome": {
+        "status": "ok",
+        "field": "service.port",
+        "old": {
+          "service.port": 18010
+        },
+        "new": {
+          "service.port": 18011
+        },
+        "work_appspec": "/root/bicameral-sandbox/repair/qwen3-0.6b-q8_0.repair-appspec.json"
+      },
+      "verify": {
+        "ok": true,
+        "rc": 0,
+        "marker_state": "ready",
+        "error": null
+      }
+    }
+  ],
+  "started_at": "2026-10-17T01:46:27Z",
+  "entry_check": {
+    "ok": false,
+    "rc": 4,
+    "marker_state": null,
+    "error": "HEALTH proc_exited=True returncode=1 http_status=None timed_out=None | INSTALL_FAIL step=health: no HTTP 200 on /health within 180.0s"
+  },
+  "final": {
+    "report": "REPAIR_REPAIRED",
+    "schema": "repair/1",
+    "app": "qwen3-0.6b-q8_0",
+    "rounds": 1,
+    "final_action": {
+      "type": "adjust_appspec",
+      "field": "service.port",
+      "port": 18011
+    },
+    "install_state": "ready",
+    "port": 18011,
+    "verify": {
+      "ok": true,
+      "rc": 0
+    }
+  },
+  "finished_at": "2026-10-17T01:48:38Z"
+}

@@ -1,0 +1,63 @@
+{
+  "schema": "repair-session/1",
+  "app": "repair-casea",
+  "llm": "http://127.0.0.1:18010/v1",
+  "model": "/root/bicameral-sandbox/apps/qwen3-1.7b-q8_0/models/Qwen3-1.7B-Q8_0.gguf",
+  "max_rounds": 4,
+  "rounds": [
+    {
+      "round": 1,
+      "phase": "plan",
+      "mode": "json_schema",
+      "elapsed_s": 19.4,
+      "diagnosis": "未归类失败",
+      "action": {
+        "type": "adjust_appspec",
+        "field": "service.port",
+        "port": 18012
+      },
+      "outcome": {
+        "status": "ok",
+        "field": "service.port",
+        "old": {
+          "service.port": 18011
+        },
+        "new": {
+          "service.port": 18012
+        },
+        "work_appspec": "/root/bicameral-sandbox/repair/repair-casea.repair-appspec.json"
+      },
+      "verify": {
+        "ok": true,
+        "rc": 0,
+        "marker_state": "ready",
+        "error": null
+      }
+    }
+  ],
+  "started_at": "2026-10-17T01:44:47Z",
+  "entry_check": {
+    "ok": false,
+    "rc": 4,
+    "marker_state": null,
+    "error": "HEALTH proc_exited=True returncode=1 http_status=None timed_out=None | INSTALL_FAIL step=health: no HTTP 200 on /health within 45.0s"
+  },
+  "final": {
+    "report": "REPAIR_REPAIRED",
+    "schema": "repair/1",
+    "app": "repair-casea",
+    "rounds": 1,
+    "final_action": {
+      "type": "adjust_appspec",
+      "field": "service.port",
+      "port": 18012
+    },
+    "install_state": "ready",
+    "port": 18012,
+    "verify": {
+      "ok": true,
+      "rc": 0
+    }
+  },
+  "finished_at": "2026-10-17T01:46:25Z"
+}
