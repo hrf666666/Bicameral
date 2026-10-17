@@ -3,7 +3,9 @@
 """Bicameral probe/1 — device sensing & install-state inventory.
 
 Implements docs/paradigm.md §3.1: one command produces one self-contained
-DeviceReport (JSON, schema "probe/1") with four sections:
+DeviceReport (JSON, schema "probe/1") with five sections (the fifth,
+`segmentation` — can-the-card-be-split? vGPU/instance surface, read-only —
+is a schema-compatible append, 2026-10-17):
 
     hardware       CPU / memory / unified-memory flag; accelerator enumeration
                    in a FIXED order (paradigm §3.1 #1):
@@ -31,6 +33,15 @@ DeviceReport (JSON, schema "probe/1") with four sections:
                    appspec/1 (pass --appspec FILE); a standalone probe run
                    reports [] with a note — install_state is defined against
                    AppSpecs the master dispatched, not against thin air.
+    segmentation   can the accelerator be split? (vGPU / instance slicing)
+                   READ-ONLY surface inventory: {tools[{name,path,status,
+                   capabilities[]}], vgpu_capable bool|null, slicing_method
+                   str|null, notes[]}. Tool existence + documented --help
+                   subcommand/flag enumeration + `vgpu -s/-c/-q` listings
+                   (queries only). NEVER creates a vGPU/instance: an
+                   experiment runs only on a *documented reversible* CLI
+                   path (create+destroy in the tool's own help), which as of
+                   2026-10-17 neither machine exposes — reasons in notes[].
 
 Engineering contract (docs/paradigm.md §2, same philosophy as server.py):
 single file, Python 3.10+, standard library only, read-only with respect to
@@ -48,6 +59,7 @@ Usage:
     python3 probe.py -o device.json           # report to file (+1-line stderr)
     python3 probe.py --appspec spec.json ...  # evaluate install_state
     python3 probe.py --no-egress              # skip egress reachability
+    python3 probe.py --selftest               # pure-function self-test (seg parsers)
 """
 
 from __future__ import annotations
@@ -140,6 +152,58 @@ EGRESS_TARGETS = [
     ("github", "https://github.com", "http"),
     ("github_ssh_443", "ssh.github.com:443", "tcp"),
 ]
+
+# ------------------------------------------------- segmentation constants
+
+# Vendor split-control device channels (kernel char devices of the Iluvatar
+# driver stack). Majors observed 2026-10-17: bi150 itrlink 236 / itrctl 237,
+# bi100 itrlink 234 / itrctl 235 — the nodes are container-visibility facts,
+# the majors may differ per host, so they are parsed, never hard-coded.
+SEG_DEV_NODES = ["/dev/itrctl", "/dev/itrlink"]
+
+# --help keyword → capability tag tables. Structural, order-stable: a tag is
+# emitted only when its own help text appears (same philosophy as
+# looks_like_gpu_csv: no keyword blacklist in the acceptance direction).
+SEG_IXSMI_HELP_TABLE = [
+    (r"GRID vGPU", "vgpu.subcommand"),
+]
+SEG_ITRCTL_HELP_TABLE = [
+    (r"(?i)\bcreate\b", "create"),
+    (r"(?i)\bdestroy\b|\bdelete\b|\bremove\b", "destroy"),
+    (r"(?i)\bvgpu\b", "vgpu"),
+    (r"(?i)\binstance\b", "instance"),
+    (r"(?i)\bslice\b|\bpartition\b", "slice"),
+]
+SEG_VGPU_FLAG_TABLE = [
+    (r"-q,--query", "vgpu.query"),
+    (r"-u,--utilization", "vgpu.utilization"),
+    (r"-p,--pmon", "vgpu.process_monitor"),
+    (r"-s,--supported", "vgpu.supported_list"),
+    (r"-c,--creatable", "vgpu.creatable_list"),
+    (r"-v,--verbose", "vgpu.verbose"),
+]
+
+# Symbol names that mark vGPU / MIG-style instance API surface inside the
+# vendor management library (libixml.so). Presence is C-API *evidence* only —
+# never by itself a documented reversible CLI path (bi150/bi100 2026-10-17:
+# symbols exist, no CLI wrapper does).
+SEG_LIB_SYMBOLS = [
+    "nvmlDeviceGetSupportedVgpus",
+    "nvmlDeviceGetCreatableVgpus",
+    "nvmlDeviceGetActiveVgpus",
+    "nvmlDeviceCreateGpuInstance",
+    "nvmlGpuInstanceCreateComputeInstance",
+    "nvmlComputeInstanceDestroy",
+    "nvmlGpuInstanceDestroy",
+    "nvmlSetVgpuVersion",
+]
+SEG_LIB_CAP_BYTES = 64 * 1024 * 1024  # read cap for the .so scan
+
+VGPU_NO_TYPES_RE = re.compile(r"No vGPUs found on this device", re.I)
+VGPU_UNSUPPORTED_RE = re.compile(r"Not supported devices in vGPU mode", re.I)
+VGPU_CARD_RE = re.compile(r"^\s*GPU:\s+(\S+)", re.M)
+VGPU_TYPE_ROW_RE = re.compile(r"^\s+\d+\s+\S")
+VGPU_ACTIVE_RE = re.compile(r"^\s*Active vGPUs\s*:\s*(\d+)\s*$", re.I)
 
 # ------------------------------------------------------------ small helpers
 
@@ -1025,6 +1089,423 @@ def eval_appspec(spec: dict, engines: list[dict], services: dict,
                     "partial must say what is missing"}
 
 
+# ------------------------------------------------------------ segmentation
+#
+# 「卡可否分割」的只读探测（2026-10-17 增补，schema 兼容追加）：
+#   - 工具存在性 + **其自身 --help 枚举**分割相关子命令/旗标（不加黑名单）；
+#   - `ixsmi vgpu -s|-c|-q` 三个只读 listing 的结构化解析；
+#   - /dev/itrctl·itrlink 通道与 /proc/devices 主设备号；
+#   - libixml 的 vGPU/MIG 式 C-API 符号（仅作证据，非 CLI 路径）。
+# 红线：绝不创建任何 vGPU/实例。受控实验仅在「文档化可逆路径」（工具自身
+# help 同时给出 create+destroy）出现时才允许，判定函数 has_reversible_pair。
+
+
+def parse_proc_devices(text: str | None) -> dict[str, int]:
+    """/proc/devices lines "<major> <name>" → {name: major} (pure; selftest-
+    covered). Header lines ("Character devices:") and noise are ignored."""
+    out: dict[str, int] = {}
+    for line in (text or "").splitlines():
+        m = re.match(r"\s*(\d+)\s+(\S+)", line)
+        if m:
+            out.setdefault(m.group(2), int(m.group(1)))
+    return out
+
+
+def parse_help_capabilities(text: str | None,
+                            table: list[tuple[str, str]]) -> list[str]:
+    """Tool's own --help text → capability tags, in table order (pure;
+    selftest-covered). A tag appears only if its help text does; None/empty
+    text → [] (absent tolerance)."""
+    if not text:
+        return []
+    return [tag for pat, tag in table if re.search(pat, text)]
+
+
+def has_reversible_pair(capabilities: list[str]) -> bool:
+    """True only when the tool's own help documents BOTH create and destroy
+    (pure; selftest-covered) — the sole gate for the controlled-experiment
+    decision. Capability-surface presence alone never unlocks an experiment."""
+    return "create" in capabilities and "destroy" in capabilities
+
+
+def parse_vgpu_listing(text: str | None) -> dict:
+    """`ixsmi vgpu -s|-c|-q` output → structured summary (pure; selftest-
+    covered). Conservatively structured: cards via "GPU:" headers, explicit
+    denial markers, "Active vGPUs: N" per-card counts (summed into
+    active_vgpus_total, None when absent), type rows (whitespace-indented
+    "<id> <name>" lines, the nvidia-smi vGPU listing layout), everything
+    else kept as clipped evidence lines — an uninterpretable answer stays
+    evidence, never a guess. None/empty → zeroed record (absent tolerance)."""
+    res = {"cards": 0, "card_ids": [], "unsupported_mode": False,
+           "no_types_markers": 0, "type_rows": 0, "other_lines": [],
+           "active_vgpus_total": None}
+    if not text or not text.strip():
+        return res
+    res["card_ids"] = [m.group(1) for m in VGPU_CARD_RE.finditer(text)]
+    res["cards"] = len(res["card_ids"])
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if VGPU_UNSUPPORTED_RE.search(line):
+            res["unsupported_mode"] = True
+            continue
+        if VGPU_NO_TYPES_RE.search(line):
+            res["no_types_markers"] += 1
+            continue
+        m = VGPU_ACTIVE_RE.match(line)
+        if m:
+            n = int(m.group(1))
+            res["active_vgpus_total"] = (res["active_vgpus_total"] or 0) + n
+            continue
+        if s.startswith("GPU:"):
+            continue
+        if s.startswith(("Timestamp", "+--", "+==", "===")) or \
+                set(s) <= set("=-+| "):
+            continue  # table chrome
+        if VGPU_TYPE_ROW_RE.match(line):
+            res["type_rows"] += 1
+            continue
+        if len(res["other_lines"]) < 20:
+            res["other_lines"].append(clip(line, LINE_CUT))
+    return res
+
+
+def decide_vgpu_capable(listings: list[dict]) -> bool | None:
+    """Combine vgpu -s/-c/-q parsed listings into the observed verdict (pure;
+    selftest-covered).
+      True   — at least one listing shows actual vGPU type rows
+      False  — listings answered but every one is an interpretable denial
+               (unsupported-mode marker, per-card no-types marker, or an
+               "Active vGPUs: 0" total)
+      None   — nothing interpretable answered (tool absent, empty, or only
+               unstructured output) — recorded as unknown, never guessed."""
+    answered = [l for l in listings if l and any(
+        (l.get("cards"), l.get("unsupported_mode"), l.get("no_types_markers"),
+         l.get("type_rows"), l.get("other_lines"),
+         l.get("active_vgpus_total") is not None))]
+    if not answered:
+        return None
+    if any(l.get("type_rows") for l in answered):
+        return True
+
+    def interpretable_denial(l: dict) -> bool:
+        return bool(l.get("unsupported_mode") or l.get("no_types_markers")
+                    or l.get("active_vgpus_total") == 0)
+
+    if all(interpretable_denial(l) for l in answered):
+        return False
+    return None
+
+
+def symbol_scan(data: bytes | None, names: list[str]) -> list[str]:
+    """Which known symbol names appear in a library image (pure; selftest-
+    covered). Plain byte containment — enough for exported-name evidence."""
+    if not data:
+        return []
+    return [n for n in names if n.encode() in data]
+
+
+def find_seg_binary(name: str, roots: list[str]) -> tuple[str | None, list[str]]:
+    """PATH first, then /usr/local|opt/<root>/bin with the root's lib dirs
+    returned for LD injection (same order rule as §3.1). Returns (path|None,
+    lib_dirs)."""
+    p, _ = find_binary(name)
+    if p:
+        return p, []
+    libs: list[str] = []
+    for root in roots or []:
+        for tpl in ("/usr/local/{root}", "/opt/{root}"):
+            for base in sorted(glob.glob(tpl.format(root=root))):
+                cand = os.path.join(base, "bin", name)
+                if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                    for sub in ("lib", "lib64"):
+                        lib = os.path.join(base, sub)
+                        if os.path.isdir(lib):
+                            libs.append(lib)
+                    return cand, libs
+    return None, []
+
+
+def probe_segmentation(vendor_tools: list[dict] | None = None) -> dict:
+    """READ-ONLY segmentation-surface inventory (see module docstring).
+    Never creates a vGPU/instance: the only executed things are --help /
+    documented query listings of already-present tools."""
+    notes: list[str] = []
+    tools: list[dict] = []
+
+    # -- itrctl: the vendor split-control CLI suggested by /dev/itrctl.
+    #    Existence only; if present, ONLY "--help" runs (never bare — an
+    #    unknown CLI's no-arg behaviour is not assumed read-only).
+    itr_path, itr_libs = find_seg_binary("itrctl", ["iluvatar", "corex"])
+    itr_caps: list[str] = []
+    if itr_path:
+        # capture_full: "GRID vGPU"-style sections live at the tail of help
+        # text — the 600-char default excerpt cuts them off (2026-10-17 lesson)
+        r = run_cmd([itr_path, "--help"], ld_prepend=itr_libs, capture_full=True)
+        help_text = r.get("full_output") or r.get("output") or ""
+        itr_caps = parse_help_capabilities(help_text, SEG_ITRCTL_HELP_TABLE)
+        tools.append({"name": "itrctl", "path": itr_path, "status": "present",
+                      "capabilities": itr_caps,
+                      "help_excerpt": clip_lines(help_text, 600)})
+    else:
+        tools.append({"name": "itrctl", "path": None, "status": "absent",
+                      "capabilities": [],
+                      "searched": ["PATH", "/usr/local|opt/{iluvatar,corex}/bin"]})
+
+    # -- ixsmi `vgpu` subcommand surface (bi150: corex root, bi100: iluvatar
+    #    root — both searched; LD injected per the 2026-10-14 lesson).
+    ix_path, ix_libs = find_seg_binary("ixsmi", ["corex", "iluvatar"])
+    listings: list[dict] = []
+    vgpu_capable: bool | None = None
+    if ix_path:
+        r_help = run_cmd([ix_path, "--help"], ld_prepend=ix_libs, capture_full=True)
+        caps = parse_help_capabilities(
+            r_help.get("full_output") or r_help.get("output"),
+            SEG_IXSMI_HELP_TABLE)
+        tool_rec = {"name": "ixsmi", "path": ix_path,
+                    "status": "present", "capabilities": caps}
+        if "vgpu.subcommand" in caps:
+            r_vh = run_cmd([ix_path, "vgpu", "-h"], ld_prepend=ix_libs,
+                           capture_full=True)
+            caps += parse_help_capabilities(
+                r_vh.get("full_output") or r_vh.get("output"),
+                SEG_VGPU_FLAG_TABLE)
+            tool_rec["capabilities"] = caps
+            for flag in ("-s", "-c", "-q"):
+                r = run_cmd([ix_path, "vgpu", flag], ld_prepend=ix_libs,
+                            capture_full=True)  # 8 cards can exceed the excerpt
+                lst = parse_vgpu_listing(
+                    r.get("full_output") or r.get("output")
+                    if r["status"] in ("ok", "nonzero") else None)
+                lst["flag"] = flag
+                listings.append(lst)
+            vgpu_capable = decide_vgpu_capable(listings)
+            if not has_reversible_pair(caps):
+                notes.append("ixsmi vgpu subcommand exposes only query flags "
+                             "(q/u/p/s/c/v/l per its own -h); no create/destroy "
+                             "option exists in any --help — no documented "
+                             "reversible CLI segmentation path")
+        else:
+            notes.append("ixsmi present but its --help carries no GRID vGPU "
+                         "section; vgpu surface not exercised")
+        tool_rec["vgpu_listings"] = listings
+        tools.append(tool_rec)
+    else:
+        tools.append({"name": "ixsmi", "path": None, "status": "absent",
+                      "capabilities": [],
+                      "searched": ["PATH", "/usr/local|opt/{corex,iluvatar}/bin"]})
+        notes.append("ixsmi not found; vGPU surface unknown (vgpu_capable=null)")
+
+    # -- kernel device channels (control planes of the vendor driver stack)
+    majors = parse_proc_devices(read_text("/proc/devices", 8192))
+    dev_channels = []
+    for node in SEG_DEV_NODES:
+        dev_channels.append({"node": node, "present": os.path.exists(node),
+                             "major": majors.get(os.path.basename(node))})
+
+    # -- vendor management library C-API evidence (libixml.so)
+    lib_syms: list[str] = []
+    lib_path = None
+    for root in ("corex", "iluvatar"):
+        for sub in ("lib64", "lib"):
+            cand = f"/usr/local/{root}/{sub}/libixml.so"
+            if os.path.isfile(cand):
+                lib_path = cand
+                break
+        if lib_path:
+            break
+    if lib_path:
+        try:
+            with open(lib_path, "rb") as f:
+                lib_syms = symbol_scan(f.read(SEG_LIB_CAP_BYTES), SEG_LIB_SYMBOLS)
+        except OSError as e:
+            notes.append(f"libixml unreadable at {lib_path}: "
+                         f"{type(e).__name__}: {e}")
+    if any(s in lib_syms for s in ("nvmlDeviceCreateGpuInstance",
+                                   "nvmlGpuInstanceCreateComputeInstance")):
+        notes.append(f"{lib_path} carries MIG-style C-API symbols "
+                     f"(nvmlDeviceCreateGpuInstance[WithPlacement]/"
+                     f"nvmlGpuInstanceCreateComputeInstance + matching *Destroy) "
+                     f"and vGPU query APIs — C-API evidence only, no CLI "
+                     f"wrapper found on this machine")
+
+    # -- verdict + no-experiment audit line
+    if vgpu_capable is False:
+        markers = [f"{l.get('flag')}:{'unsupported_mode' if l.get('unsupported_mode') else 'no_types x' + str(l.get('no_types_markers'))}"
+                   for l in listings]
+        notes.append("vgpu_capable=false as observed from inside this "
+                     "container/host: " + "; ".join(markers) +
+                     " — vGPU provisioning is host-level and 0 types are "
+                     "visible here; host-side state may differ")
+    if not has_reversible_pair(itr_caps):
+        notes.append("controlled create→destroy experiment NOT performed: no "
+                     "tool's own documentation exposes a reversible "
+                     "segmentation path (irreversible/unclear territory — "
+                     "capabilities recorded only)")
+
+    slicing_method = None
+    if vgpu_capable is True:
+        slicing_method = "vgpu (vendor mdev-style instances via /dev/itrctl ioctls)"
+
+    return {"tools": tools,
+            "vgpu_capable": vgpu_capable,
+            "slicing_method": slicing_method,
+            "notes": notes,
+            "dev_channels": dev_channels,
+            "lib_api_symbols": lib_syms,
+            "lib_path": lib_path}
+
+
+# --------------------------------------------------------------- selftest
+# Pure functions only (no network, no filesystem, no subprocess). Covers the
+# segmentation section's parsers incl. absent tolerance — real command
+# outputs captured 2026-10-17 on bi150/bi100 are pinned as fixtures.
+
+BI150_VGPU_S_SAMPLE = """GPU: 00000000:8D:00.0
+No vGPUs found on this device
+GPU: 00000000:90:00.0
+No vGPUs found on this device
+"""
+
+BI100_VGPU_S_SAMPLE = "Not supported devices in vGPU mode\n"
+
+VGPU_POPULATED_SAMPLE = """GPU: 00000000:8D:00.0
+    71   Iluvatar vGPU BI-4C
+    72   Iluvatar vGPU BI-4C
+"""
+
+VGPU_ACTIVE_TABLE_SAMPLE = """Timestamp    Sun Oct 18 00:05:17 2026
++---------------------------------------------------------------------------------+
+|      IX-ML: 4.4.0                     Driver Version: 4.4.0                     |
+|-------------------------------------+------------------------------+------------+
+| GPU  Name                           | Bus-Id                       | GPU-Util   |
+| 0   Iluvatar BI-V150                | 00000000:8D:00.0             | 0%         |
++-------------------------------------+------------------------------+------------+
+"""
+
+VGPU_ACTIVE_Q_SAMPLE = """GPU: 00000000:8D:00.0
+Active vGPUs                                : 0
+GPU: 00000000:90:00.0
+Active vGPUs                                : 0
+"""
+
+PROC_DEVICES_SAMPLE = """Character devices:
+  1 mem
+  5 /dev/tty
+236 itrlink
+237 itrctl
+238 iluvatar
+239 aux
+"""
+
+
+def cmd_selftest(_args: argparse.Namespace) -> int:
+    failures: list[str] = []
+
+    def check(name: str, cond: bool, detail: str = "") -> None:
+        if cond:
+            print("ok   %s" % name)
+        else:
+            failures.append(name)
+            print("FAIL %s %s" % (name, detail))
+
+    # -- parse_proc_devices
+    pd = parse_proc_devices(PROC_DEVICES_SAMPLE)
+    check("proc_devices.majors", pd.get("itrctl") == 237 and pd.get("itrlink") == 236
+          and pd.get("iluvatar") == 238, str(pd))
+    check("proc_devices.skips_headers",
+          all("Character" not in k and "devices" not in k for k in pd)
+          and all(isinstance(v, int) for v in pd.values()), str(pd))
+    check("proc_devices.absent_none", parse_proc_devices(None) == {})
+    check("proc_devices.absent_empty", parse_proc_devices("") == {})
+
+    # -- parse_help_capabilities
+    check("help_caps.ixsmi_vgpu_section",
+          parse_help_capabilities("GRID vGPU:\n  vgpu   Displays vGPU info",
+                                  SEG_IXSMI_HELP_TABLE) == ["vgpu.subcommand"])
+    check("help_caps.absent_none", parse_help_capabilities(None, SEG_IXSMI_HELP_TABLE) == [])
+    check("help_caps.absent_empty", parse_help_capabilities("", SEG_VGPU_FLAG_TABLE) == [])
+    vh = ("-q,--query    Display information\n"
+          "  -s,--supported  Display supported vGPU types\n"
+          "  -c,--creatable  Display creatable\n"
+          "  -x,--xylophone  unrelated")
+    check("help_caps.vgpu_flags_matched_only",
+          parse_help_capabilities(vh, SEG_VGPU_FLAG_TABLE) ==
+          ["vgpu.query", "vgpu.supported_list", "vgpu.creatable_list"])
+    itr_help = "usage: itrctl [OPTIONS]\n\n  create DEVICE  make a vgpu\n  destroy ID  remove it\n"
+    check("help_caps.itrctl_create_destroy",
+          parse_help_capabilities(itr_help, SEG_ITRCTL_HELP_TABLE) ==
+          ["create", "destroy", "vgpu"])
+
+    # -- has_reversible_pair (the experiment gate)
+    check("revpair.both", has_reversible_pair(["create", "destroy", "vgpu"]) is True)
+    check("revpair.create_only", has_reversible_pair(["create"]) is False)
+    check("revpair.neither", has_reversible_pair(["vgpu", "slice"]) is False)
+    check("revpair.empty", has_reversible_pair([]) is False)
+
+    # -- parse_vgpu_listing
+    bi150 = parse_vgpu_listing(BI150_VGPU_S_SAMPLE)
+    check("vgpu_listing.bi150_zero_types",
+          bi150["cards"] == 2 and bi150["no_types_markers"] == 2
+          and bi150["type_rows"] == 0 and bi150["unsupported_mode"] is False
+          and bi150["other_lines"] == [], str(bi150))
+    bi100 = parse_vgpu_listing(BI100_VGPU_S_SAMPLE)
+    check("vgpu_listing.bi100_unsupported_mode",
+          bi100["unsupported_mode"] is True and bi100["cards"] == 0, str(bi100))
+    pop = parse_vgpu_listing(VGPU_POPULATED_SAMPLE)
+    check("vgpu_listing.populated_type_rows",
+          pop["cards"] == 1 and pop["type_rows"] == 2
+          and pop["no_types_markers"] == 0, str(pop))
+    act = parse_vgpu_listing(VGPU_ACTIVE_TABLE_SAMPLE)
+    check("vgpu_listing.table_chrome_ignored",
+          act["cards"] == 0 and act["type_rows"] == 0
+          and len(act["other_lines"]) >= 1
+          and all("GPU-Util" in ln or "BI-V150" in ln or "IX-ML" in ln
+                  for ln in act["other_lines"]), str(act))
+    q = parse_vgpu_listing(VGPU_ACTIVE_Q_SAMPLE)
+    check("vgpu_listing.active_count_parsed",
+          q["active_vgpus_total"] == 0 and q["other_lines"] == []
+          and q["cards"] == 2, str(q))
+    check("vgpu_listing.absent_none",
+          parse_vgpu_listing(None)["cards"] == 0)
+    check("vgpu_listing.absent_empty",
+          parse_vgpu_listing("   \n")["no_types_markers"] == 0)
+
+    # -- decide_vgpu_capable
+    check("decide.absent_unknown",
+          decide_vgpu_capable([]) is None)
+    check("decide.empty_listings_unknown",
+          decide_vgpu_capable([parse_vgpu_listing(None)]) is None)
+    check("decide.zero_types_false",
+          decide_vgpu_capable([parse_vgpu_listing(BI150_VGPU_S_SAMPLE)]) is False)
+    check("decide.unsupported_mode_false",
+          decide_vgpu_capable([parse_vgpu_listing(BI100_VGPU_S_SAMPLE)]) is False)
+    check("decide.active_zero_false",
+          decide_vgpu_capable([parse_vgpu_listing(VGPU_ACTIVE_Q_SAMPLE)]) is False)
+    check("decide.bi150_trio_false",
+          decide_vgpu_capable([parse_vgpu_listing(BI150_VGPU_S_SAMPLE),
+                               parse_vgpu_listing(BI150_VGPU_S_SAMPLE),
+                               parse_vgpu_listing(VGPU_ACTIVE_Q_SAMPLE)]) is False)
+    check("decide.populated_true",
+          decide_vgpu_capable([parse_vgpu_listing(VGPU_POPULATED_SAMPLE)]) is True)
+    check("decide.uninterpretable_unknown",
+          decide_vgpu_capable([parse_vgpu_listing(VGPU_ACTIVE_TABLE_SAMPLE)]) is None)
+    check("decide.mixed_any_true_wins",
+          decide_vgpu_capable([parse_vgpu_listing(BI100_VGPU_S_SAMPLE),
+                               parse_vgpu_listing(VGPU_POPULATED_SAMPLE)]) is True)
+
+    # -- symbol_scan
+    blob = b"\0nvmlDeviceCreateGpuInstance\0nvmlSetVgpuVersion\0"
+    check("symbols.found", symbol_scan(blob, SEG_LIB_SYMBOLS) ==
+          ["nvmlDeviceCreateGpuInstance", "nvmlSetVgpuVersion"])
+    check("symbols.absent_data", symbol_scan(None, SEG_LIB_SYMBOLS) == [])
+    check("symbols.absent_empty", symbol_scan(b"", SEG_LIB_SYMBOLS) == [])
+
+    print("selftest: %d failure(s)" % len(failures))
+    return 1 if failures else 0
+
+
 # --------------------------------------------------------------------- main
 
 
@@ -1070,6 +1551,7 @@ def build_report(args: argparse.Namespace) -> dict:
     stack = probe_stack(hardware.get("accelerators", []), args.no_egress,
                         hardware.get("vendor_tools") or [])
     installed = probe_installed(args.model_dirs, sorted(extra_health_paths))
+    segmentation = probe_segmentation(hardware.get("vendor_tools") or [])
     engines = installed["engines"]
     services = installed["services"]
     models = installed["models"]
@@ -1104,6 +1586,7 @@ def build_report(args: argparse.Namespace) -> dict:
         "hardware": hardware,
         "stack": stack,
         "installed": installed,
+        "segmentation": segmentation,
         "install_state": install_state,
         "notes": notes,
     }
@@ -1126,7 +1609,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--verify-hashes", action="store_true",
                     help="hash model files when an appspec provides sha256")
     ap.add_argument("--compact", action="store_true", help="one-line JSON output")
+    ap.add_argument("--selftest", action="store_true",
+                    help="pure-function self-test (segmentation parsers); "
+                         "exit 0 iff zero failures")
     args = ap.parse_args(argv)
+
+    if args.selftest:
+        return cmd_selftest(args)
 
     # appspec entries arrive as (label, path)
     args.appspec = [(os.path.basename(a), a) for a in args.appspec]
@@ -1152,8 +1641,10 @@ def main(argv: list[str] | None = None) -> int:
                    if e["status"] == "present") or "none"
     svc = report["installed"]["services"].get("inference_services") or []
     egr = report["stack"]["egress"].get("summary", "n/a")
+    seg = report.get("segmentation") or {}
     print(f"probe/1: accel=[{acc}] engines=[{eng}] "
-          f"inference_services={[s['port'] for s in svc]} egress=[{egr}]",
+          f"inference_services={[s['port'] for s in svc]} egress=[{egr}] "
+          f"seg[vgpu_capable={seg.get('vgpu_capable')}]",
           file=sys.stderr)
     return 0
 

@@ -22,7 +22,8 @@ Red-team hardening (2026-10-15 review, confirmed findings):
         verified at startup and a broken chain warns loudly on stderr
         (deleted/altered/reordered rows become detectable; note honestly:
         deleting the LAST row is only detectable via external anchoring of
-        the tail hash, which the startup line prints for exactly that use);
+        the tail hash — the `anchor` subcommand below automates exactly
+        that, and every startup/append cross-checks the anchored tail);
     A10 before deciding, each candidate with a health_url is probed
         (GET, bounded --health-timeout); unreachable/unhealthy (HTTP != 200
         or strata_state != ok) candidates are NOT_VIABLE and stay in the
@@ -50,9 +51,19 @@ Subcommands:
                                 selected device (local subprocess, or ssh with
                                 the task JSON on stdin) and read the result/1
                                 envelope back from stdout; appends RESULT
+    anchor --audit <f> --out <f>
+                                verify the chain, then freeze its tail OUTSIDE
+                                the audit file (anchor/1: timestamp, row count,
+                                tail seq + tail-line sha256_16) — with an
+                                anchor in place, deleting/rewriting the last
+                                rows (invisible to in-file chaining) is
+                                detected loudly at every startup/append
+                                cross-check (default anchor path: <audit>.anchor,
+                                checked only when the file exists)
     selftest / --selftest       pure-function self-test (scoring policy,
                                 devices/perf schema validation, audit hash
-                                chain, envelope shape mirror, fixed argv)
+                                chain, external anchor record, envelope shape
+                                mirror, fixed argv)
 
 Inputs (paths are CWD-relative; defaults match the paradigm stage-2/4 layout):
     --devices   examples/devices.json                     devices/1 manifest
@@ -86,7 +97,8 @@ router.py does NOT import task.py (single-file deployability, same rule as
 install.py not importing probe.py): the result/1 shape check is mirrored
 below and both selftests pin the same contract.
 
-Exit codes: 0 ok · 2 usage/schema error · 3 no viable candidate ·
+Exit codes: 0 ok · 2 usage/schema error (incl. anchor over a broken or
+empty chain) · 3 no viable candidate ·
 4 execution failure (device run failed or envelope invalid).
 Python 3.10+, standard library only.
 """
@@ -108,6 +120,7 @@ import urllib.request
 DEVICES_SCHEMA = "devices/1"
 BENCH_SCHEMA = "bench/1"
 RESULT_SCHEMA = "result/1"                       # mirror of task.py
+ANCHOR_SCHEMA = "anchor/1"                       # external tail anchor (A2)
 
 # A11: devices/1 whitelist facts. `run` is gone — the router owns the argv
 # (execute_argv); a new transport or exec kind is a deliberate edit here,
@@ -561,24 +574,130 @@ def verify_audit(path):
         return True, "no audit yet (fresh chain)", None, 0
 
 
-def append_audit(path, rec):
+def append_audit(path, rec, anchor=None):
     """Append one chained JSONL event (open-append-flush-close: crash-safe).
 
     A2: the record gains seq (previous chained seq + 1) and prev_sha256_16
     (hash of the previous raw line as observed on disk — after tampering,
     the new row honestly chains onto the exact bytes it saw, so the break
     stays visible at every future verify_audit).
+    `anchor`: anchor/1 file cross-checked BEFORE writing — chaining onto a
+    tail that differs from the anchored one means the file moved between
+    anchoring and this append, which warns loudly (check_anchor) but still
+    lands (evidence-preserving). Returns the new tail sha256_16 (the next
+    external-anchoring point).
     """
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
     prev_raw, prev_seq = _audit_tail(path)
+    if anchor:
+        check_anchor(anchor, audit_line_sha(prev_raw) if prev_raw else None,
+                     "append")
     rec = dict(rec)
     rec.update(chain_link(prev_raw, prev_seq + 1))
+    line = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+        f.write(line + "\n")
         f.flush()
         os.fsync(f.fileno())
+    return audit_line_sha(line)
+
+
+# --------------------------------------------------------------------------- #
+# external anchoring (A2's stated gap): in-file chaining cannot see deletion
+# of the LAST rows. The anchor subcommand freezes the tail hash OUTSIDE the
+# audit file (anchor/1 record); every startup/append then cross-checks the
+# anchored tail and warns LOUDLY on mismatch — 审计灭迹 becomes detectable.
+# --------------------------------------------------------------------------- #
+
+def build_anchor_record(tail_sha, rows, audit_path, seq=None, ts=None):
+    """Pure: the anchor/1 record — the operator-held fact "the audit ended
+    EXACTLY here (rows/seq/tail hash) at this time". Selftest-covered."""
+    return {"schema": ANCHOR_SCHEMA,
+            "ts": round(time.time() if ts is None else ts, 3),
+            "audit": audit_path,
+            "rows": rows,
+            "seq": seq,
+            "tail_sha256_16": tail_sha}
+
+
+def anchored_tail(obj):
+    """Pure: extract the anchored tail hash. Returns (tail16, None) or
+    (None, err) — a malformed anchor must never silently count as a match.
+    Selftest-covered."""
+    if not isinstance(obj, dict) or obj.get("schema") != ANCHOR_SCHEMA:
+        return None, "anchor schema must be %r" % ANCHOR_SCHEMA
+    tail = obj.get("tail_sha256_16")
+    if not isinstance(tail, str) or not SHA16_RE.match(tail):
+        return None, "anchor tail_sha256_16 must be 16 lowercase hex chars"
+    return tail, None
+
+
+def check_anchor(anchor_path, live_tail, when):
+    """Loud external-anchor cross-check at startup/append (A2).
+
+    No anchor file -> nothing to compare (True — stated, not invented).
+    Anchor unreadable/malformed -> loud warning, False.
+    Anchored tail != live tail -> LOUD stderr warning, False: rows moved
+    since anchoring — a legitimate append (then re-anchor) or deletion /
+    rewrite (audit 灭迹). Fail-loud, never fail-stopped: recovery is
+    appending and re-anchoring; the check never blocks routing.
+    """
+    if not anchor_path:
+        return True
+    try:
+        with open(anchor_path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+    except OSError:
+        return True                       # no anchor yet — nothing to compare
+    except Exception as e:
+        print("router: *** ANCHOR UNREADABLE (%s): %s (%s) — investigate "
+              "before trusting the audit tail"
+              % (when, anchor_path, type(e).__name__), file=sys.stderr)
+        return False
+    tail, err = anchored_tail(obj)
+    if err:
+        print("router: *** ANCHOR MALFORMED (%s): %s: %s"
+              % (when, anchor_path, err), file=sys.stderr)
+        return False
+    if tail != live_tail:
+        print("router: *** ANCHOR MISMATCH (%s) *** %s: anchored tail=%s but "
+              "the live audit tail is %s — rows moved since anchoring. "
+              "Legitimate append? re-run `router.py anchor`. Otherwise rows "
+              "were deleted/rewritten after the anchor (audit tampering)."
+              % (when, anchor_path, tail, live_tail), file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_anchor(args) -> int:
+    """`anchor`: verify the chain, then freeze its tail outside the file.
+
+    Refuses (exit 2) to anchor a BROKEN chain or an empty audit — an
+    anchor over tampered/absent rows would legitimize them.
+    """
+    ok, why, tail, rows = verify_audit(args.audit)
+    if not ok:
+        print("router: refuse to anchor a BROKEN chain: %s" % why,
+              file=sys.stderr)
+        return 2
+    if not tail:
+        print("router: nothing to anchor (audit has no rows): %s"
+              % args.audit, file=sys.stderr)
+        return 2
+    _, last_seq = _audit_tail(args.audit)
+    rec = build_anchor_record(tail, rows, args.audit,
+                              seq=last_seq if last_seq else None)
+    d = os.path.dirname(args.out)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(rec, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    print("router: anchor written: %s rows=%d seq=%s tail=%s (audit=%s)"
+          % (args.out, rows, rec["seq"], tail, args.audit), file=sys.stderr)
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -691,6 +810,7 @@ def _route_once(args, task):
     else:
         print("router: AUDIT CHAIN BROKEN — %s (audit=%s tail_sha256_16=%s)"
               % (why, args.audit, tail), file=sys.stderr)
+    check_anchor(getattr(args, "anchor", None), tail, "startup")   # A2
     expect, err = _parse_expect_perf_sha(getattr(args, "expect_perf_sha", []))
     if err:
         return None, None, None, err
@@ -706,10 +826,14 @@ def _route_once(args, task):
         return None, None, None, err
     ordered, reason = decide(task["latency_class"], cands)
     selected = ordered[0]["device"] if ordered and ordered[0]["viable"] else None
-    append_audit(args.audit, route_event(task["task_id"],
-                                         task["latency_class"],
-                                         ordered, selected, reason,
-                                         manifest_sha))
+    new_tail = append_audit(args.audit, route_event(task["task_id"],
+                                                    task["latency_class"],
+                                                    ordered, selected, reason,
+                                                    manifest_sha),
+                            anchor=getattr(args, "anchor", None))
+    print("router: appended, new tail_sha256_16=%s (re-anchor: "
+          "`router.py anchor --audit %s --out <anchor file>`)"
+          % (new_tail, args.audit), file=sys.stderr)
     return selected, ordered, manifest_sha, \
         (None if selected else "no viable candidate: %s" % reason)
 
@@ -844,10 +968,11 @@ def cmd_execute(args) -> int:
     if err:
         append_audit(args.audit, {"ts": round(time.time(), 3), "event": "EXECUTE_FAIL",
                                   "task_id": task["task_id"], "device": selected,
-                                  "detail": err})
+                                  "detail": err}, anchor=args.anchor)
         print("router: execute failed: %s" % err, file=sys.stderr)
         return 4
-    append_audit(args.audit, result_event(task["task_id"], env, manifest_sha))
+    append_audit(args.audit, result_event(task["task_id"], env, manifest_sha),
+                 anchor=args.anchor)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(env, f, ensure_ascii=False, indent=2)
@@ -1048,6 +1173,37 @@ def cmd_selftest(_args) -> int:
     ok, why, _, _ = verify_audit_lines([r1, corrupt])
     check("chain.trailing_corruption_detected", not ok, why)
 
+    # --- A2 external anchoring: anchor/1 record round-trip + mismatch
+    #     primitive (pure; the file cross-check itself is check_anchor I/O,
+    #     excluded from this selftest like health_probe) --- #
+    tail_r3 = audit_line_sha(r3)
+    rec = build_anchor_record(tail_r3, 4, "route-audit.jsonl", seq=3, ts=1.0)
+    check("anchor.record_shape",
+          rec["schema"] == "anchor/1" and rec["rows"] == 4 and rec["seq"] == 3
+          and rec["audit"] == "route-audit.jsonl" and rec["ts"] == 1.0
+          and rec["tail_sha256_16"] == tail_r3)
+    got, err = anchored_tail(rec)
+    check("anchor.tail_roundtrip", got == tail_r3 and err is None, err or got)
+    for bad_anchor in (None, {}, {"schema": "anchor/9", "tail_sha256_16": "a" * 16},
+                       {"schema": "anchor/1"},
+                       {"schema": "anchor/1", "tail_sha256_16": "XYZ"},
+                       {"schema": "anchor/1", "tail_sha256_16": "a" * 15}):
+        got, err = anchored_tail(bad_anchor)
+        if not (got is None and bool(err)):
+            break
+    check("anchor.rejects_malformed", got is None and bool(err), repr(bad_anchor))
+    # the mismatch primitive: an anchor over r3 does NOT match the tail of
+    # the truncated chain [legacy, r1] — exactly the last-row deletion that
+    # in-file chaining cannot see (A2's stated gap)
+    ok2, why2, tail_trunc, rows_trunc = verify_audit_lines([legacy, r1])
+    anchored = anchored_tail(build_anchor_record(tail_r3, 4, "a", seq=3))[0]
+    check("anchor.detects_truncated_tail",
+          ok2 and rows_trunc == 2 and tail_trunc == audit_line_sha(r1)
+          and anchored != tail_trunc, "%s vs %s" % (anchored, tail_trunc))
+    check("anchor.matches_intact_tail",
+          anchored_tail(build_anchor_record(tail2 := tail_trunc, 2, "a"))[0]
+          == tail2)
+
     # --- A11: devices/1 structured whitelist — the manifest states facts,
     #     the router owns the argv; run/unknown fields fail closed --- #
     man = {"schema": "devices/1", "devices": [
@@ -1232,6 +1388,10 @@ def main(argv=None) -> int:
                             % DEFAULT_BENCH_DIR)
         p.add_argument("--audit", default=DEFAULT_AUDIT,
                        help="ROUTE audit JSONL (default: %s)" % DEFAULT_AUDIT)
+        p.add_argument("--anchor", default=None, metavar="FILE",
+                       help="anchor/1 file to cross-check the audit tail "
+                            "against at startup/append (A2; default: "
+                            "<audit>.anchor, consulted only when it exists)")
         p.add_argument("--expect-perf-sha", action="append", default=[],
                        metavar="DEVICE=SHA256_16", dest="expect_perf_sha",
                        help="pin a device's perf file fingerprint (A1, "
@@ -1253,6 +1413,15 @@ def main(argv=None) -> int:
     ap_e.add_argument("--timeout", type=float, default=EXECUTE_TIMEOUT_S,
                       help="device run timeout in seconds")
 
+    ap_a = sub.add_parser("anchor",
+                          help="freeze the audit tail hash outside the audit "
+                               "file (A2 external anchoring)")
+    ap_a.add_argument("--audit", default=DEFAULT_AUDIT,
+                      help="ROUTE audit JSONL (default: %s)" % DEFAULT_AUDIT)
+    ap_a.add_argument("--out", required=True, metavar="FILE",
+                      help="anchor/1 file to write (tail seq + row count + "
+                           "timestamp + tail-line sha256_16)")
+
     sub.add_parser("selftest", help="pure-function self-test")
 
     args = ap.parse_args(argv)
@@ -1265,10 +1434,14 @@ def main(argv=None) -> int:
         if err:
             print("router: %s" % err, file=sys.stderr)
             return 2
+        if args.anchor is None:
+            args.anchor = args.audit + ".anchor"   # zero-config external anchoring
     if args.cmd == "route":
         return cmd_route(args)
     if args.cmd == "execute":
         return cmd_execute(args)
+    if args.cmd == "anchor":
+        return cmd_anchor(args)
     if args.cmd == "selftest":
         return cmd_selftest(args)
     ap.print_usage(sys.stderr)

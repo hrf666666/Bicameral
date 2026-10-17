@@ -35,6 +35,21 @@ Registry (fleet-registry/1, one JSON file, master-owned): per device
 tolerated, never fatal: bad entries are dropped with a stderr warning
 and the file is rebuilt on the next successful check.
 
+Daemon (resident mode): re-runs the exact check round every --interval,
+prints a loud "*** STATE device: A -> B ***" event line on every state
+transition (ONLINE/STALE/OFFLINE, "new" on first sighting, GONE when a
+device leaves the manifest), appends each round to the daemon-owned hash
+chain <registry_dir>/audit.jsonl (A2: seq + prev_sha256_16, mirror of
+router.py) and writes the chain tail sha256_16 into the anchor file
+(--anchor, default <registry_dir>/audit.anchor). The anchor is
+deliberately a SEPARATE file from the audit: copy it off-host (see
+deploy/systemd/README.md for a one-line cron) and deleting the LAST audit
+row on the host becomes externally visible — the anchored tail no longer
+matches the audit's actual tail. This closes the A2 residual (last-row
+deletion is invisible to in-file chaining) by automating the external
+anchoring the red-team review left as a manual ops action. SIGTERM/SIGINT
+finish the current round and exit gracefully (exit 0).
+
 Red line: every external invocation (python3 probe / ssh / scp) goes
 through an injected runner callable — selftest exercises the ssh path
 with a stub runner and never touches a real device.
@@ -43,6 +58,9 @@ Usage:
     python3 bicameral/fleet.py check --devices examples/devices.json \
             [--registry results/fleet/registry.json] [--stale-s 300]
     python3 bicameral/fleet.py status --registry results/fleet/registry.json
+    python3 bicameral/fleet.py daemon --devices examples/devices.json \
+            --registry results/fleet/registry.json --interval 300 \
+            [--anchor results/fleet/audit.anchor]
     python3 bicameral/fleet.py selftest        # pure functions only
 """
 
@@ -55,8 +73,10 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
+import threading
 import time
 
 PROBE_SCHEMA = "probe/1"
@@ -67,6 +87,11 @@ ONLINE, STALE, OFFLINE = "ONLINE", "STALE", "OFFLINE"
 
 DEFAULT_REGISTRY = "results/fleet/registry.json"
 DEFAULT_STALE_S = 300.0
+DEFAULT_INTERVAL_S = 300.0          # daemon round period
+FLEET_AUDIT_NAME = "audit.jsonl"    # daemon-owned round chain, beside registry
+FLEET_ANCHOR_NAME = "audit.anchor"  # anchor: a SEPARATE file, external anchor
+ANCHOR_SCHEMA = "fleet-anchor/1"
+ROUND_EVENT = "FLEET_ROUND"
 DEFAULT_TIMEOUT_S = 120.0          # per subprocess step, per device
 REMOTE_SANDBOX = "/tmp/bicameral-fleet"   # fleet-owned remote scratch dir
 STDERR_EXCERPT = 200               # max chars of a child's stderr kept
@@ -402,6 +427,130 @@ def save_registry(path, registry):
 
 
 # --------------------------------------------------------------------------- #
+# daemon pure core — state diff + A2 chain + anchor assembly (selftest-pinned)
+# --------------------------------------------------------------------------- #
+
+def diff_states(prev_states, states):
+    """One daemon round's registry diff (pure). prev_states/states are
+    {device: state}; prev None = first sighting ("new" device), current
+    None = the device left the manifest (GONE). Returns [(name, prev, cur)]
+    for NEW and CHANGED devices only, sorted by name — an unchanged round
+    diffs to []. State values are never interpreted here (any labels work),
+    so the selftest pins the diff shape, not the vocabulary."""
+    prev_states = prev_states or {}
+    out = []
+    for name in sorted(set(prev_states) | set(states)):
+        prev = prev_states.get(name)
+        cur = states.get(name)
+        if prev != cur:
+            out.append((name, prev, cur))
+    return out
+
+
+def audit_line_sha(raw_line):
+    """sha256_16 of one audit line's exact bytes (trailing newline excluded).
+    Mirror of router.py audit_line_sha — no import, by design (same policy
+    as the devices/1 validator above)."""
+    return hashlib.sha256(raw_line.rstrip("\n").encode("utf-8")).hexdigest()[:16]
+
+
+def chain_link(prev_raw, seq):
+    """Chain fields linking a new record onto prev_raw (mirror of
+    router.py chain_link; None = fresh chain)."""
+    return {"seq": seq,
+            "prev_sha256_16": audit_line_sha(prev_raw) if prev_raw else None}
+
+
+def audit_tail_raw(text):
+    """Pure tail scan over audit file text (router.py _audit_tail
+    semantics): (last non-empty raw line, highest chained seq seen).
+    Legacy unchained rows still set prev_raw but not seq. (None, 0) when
+    the audit has no rows yet."""
+    prev_raw, last_seq = None, 0
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        prev_raw = raw
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("seq"), int):
+            last_seq = obj["seq"]
+    return prev_raw, last_seq
+
+
+def round_event(round_no, states, manifest_sha, ts):
+    """Pure: one FLEET_ROUND record body — what a daemon round observed
+    (seq/prev_sha256_16 are added by append_audit_event, never here)."""
+    return {"event": ROUND_EVENT,
+            "round": round_no,
+            "ts": round(ts, 3),
+            "utc": iso_utc(ts),
+            "states": dict(sorted(states.items())),
+            "manifest_sha256_16": manifest_sha}
+
+
+def anchor_text(tail_sha, seq, audit_path, ts):
+    """Pure: the EXACT bytes written to the anchor file — one sorted-key
+    JSON line + newline, so an external copy (cron-copied off-host) can be
+    compared byte-for-byte against the audit's actual tail at any time."""
+    return json.dumps({"schema": ANCHOR_SCHEMA,
+                       "audit_path": audit_path,
+                       "tail_sha256_16": tail_sha,
+                       "seq": seq,
+                       "updated_ts": round(ts, 3),
+                       "updated_utc": iso_utc(ts)},
+                      ensure_ascii=False, sort_keys=True) + "\n"
+
+
+def append_audit_event(path, rec):
+    """Append one chained JSONL event (router.py append_audit semantics:
+    open-append-flush-fsync-close, crash-safe). The record honestly chains
+    onto the exact tail bytes observed on disk — after tampering the break
+    stays visible at every future verify — and the daemon's SEPARATE anchor
+    file makes even last-row deletion externally comparable. Returns
+    (new_tail_sha16, seq, None) or (None, None, err)."""
+    d = os.path.dirname(path)
+    try:
+        if d:
+            os.makedirs(d, exist_ok=True)
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                prev_raw, prev_seq = audit_tail_raw(f.read())
+        except OSError:
+            prev_raw, prev_seq = None, 0
+        rec = dict(rec)
+        rec.update(chain_link(prev_raw, prev_seq + 1))
+        line = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        return audit_line_sha(line), rec["seq"], None
+    except OSError as e:
+        return None, None, "cannot append audit %s: %s" % (
+            path, e.strerror or e)
+
+
+def save_anchor(path, text):
+    """Atomic anchor write (tmp + os.replace — same discipline as the
+    registry, an externally compared file must never be seen half-written).
+    Returns None or an error string."""
+    parent = os.path.dirname(os.path.abspath(path))
+    try:
+        os.makedirs(parent, exist_ok=True)
+        tmp = os.path.join(parent, ".%s.tmp-%d" % (
+            os.path.basename(path), os.getpid()))
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+        return None
+    except OSError as e:
+        return "cannot write anchor %s: %s" % (path, e.strerror or e)
+
+
+# --------------------------------------------------------------------------- #
 # the one door to the outside world — runner injection
 # --------------------------------------------------------------------------- #
 
@@ -481,24 +630,19 @@ def print_table(rows):
 # subcommands
 # --------------------------------------------------------------------------- #
 
-def cmd_check(args):
-    devices, manifest_sha, err = load_devices(args.devices)
-    if err:
-        print("fleet: devices: %s" % err, file=sys.stderr)
-        return 2
-    registry, problems = load_registry(args.registry)
-    for p in problems:
-        print("fleet: registry: %s" % p, file=sys.stderr)
-    reports_dir = os.path.join(
-        os.path.dirname(os.path.abspath(args.registry)), "reports")
-    now = time.time()
+def probe_round_rows(devices, registry, probe_path, reports_dir,
+                     runner, timeout_s, stale_s, now):
+    """One check round over every device: probe, classify, update the
+    registry in place on ONLINE, return the table rows. This is exactly
+    the loop cmd_check has always run — the daemon reuses it verbatim
+    each round, so resident and one-shot checks can never drift apart."""
     rows = []
     for dev in devices:
         name = dev["name"]
         path, sha, detail = probe_device(
-            dev, args.probe, reports_dir, default_runner, args.timeout_s)
+            dev, probe_path, reports_dir, runner, timeout_s)
         age = entry_age(registry, name, now)
-        state = classify(age, path is not None, args.stale_s)
+        state = classify(age, path is not None, stale_s)
         if state == ONLINE:
             entry = registry["devices"].get(name) or {}
             registry["devices"][name] = {
@@ -515,6 +659,23 @@ def cmd_check(args):
                      "report_sha256_16": entry.get("report_sha256_16", "-")
                      if entry else "-",
                      "detail": "-" if state == ONLINE else detail})
+    return rows
+
+
+def cmd_check(args):
+    devices, manifest_sha, err = load_devices(args.devices)
+    if err:
+        print("fleet: devices: %s" % err, file=sys.stderr)
+        return 2
+    registry, problems = load_registry(args.registry)
+    for p in problems:
+        print("fleet: registry: %s" % p, file=sys.stderr)
+    reports_dir = os.path.join(
+        os.path.dirname(os.path.abspath(args.registry)), "reports")
+    now = time.time()
+    rows = probe_round_rows(devices, registry, args.probe, reports_dir,
+                            default_runner, args.timeout_s, args.stale_s,
+                            now)
     registry["updated_ts"] = round(time.time(), 3)
     registry["manifest_sha256_16"] = manifest_sha
     print_table(rows)
@@ -566,6 +727,98 @@ def cmd_status(args):
     print("fleet: %d device(s) in registry, %d OFFLINE (stale_s=%g)"
           % (len(rows), offline, args.stale_s), file=sys.stderr)
     return 1 if offline else 0
+
+
+def cmd_daemon(args):
+    """Resident loop: the exact check round every --interval, STATE-change
+    events on transitions, every round chained onto the fleet audit with
+    its tail sha256_16 anchored into a separate file (A2 residual closed:
+    last-row deletion becomes externally visible). SIGTERM/SIGINT finish
+    the current round — evidence and anchor are always consistent — and
+    exit 0."""
+    if not (isinstance(args.interval, (int, float)) and args.interval > 0):
+        print("fleet: --interval must be a positive number of seconds, "
+              "got %r" % (args.interval,), file=sys.stderr)
+        return 2
+    devices, manifest_sha, err = load_devices(args.devices)
+    if err:
+        print("fleet: devices: %s" % err, file=sys.stderr)
+        return 2
+    registry, problems = load_registry(args.registry)
+    for p in problems:
+        print("fleet: registry: %s" % p, file=sys.stderr)
+    reg_dir = os.path.dirname(os.path.abspath(args.registry))
+    reports_dir = os.path.join(reg_dir, "reports")
+    audit_path = os.path.join(reg_dir, FLEET_AUDIT_NAME)
+    anchor_path = args.anchor or os.path.join(reg_dir, FLEET_ANCHOR_NAME)
+    # Previous states start as what `status` would print right now (the
+    # probe-less registry classify) — a daemon restart therefore does not
+    # invent spurious transitions; devices absent from the registry start
+    # "new". The fleet audit is the daemon's own chain, co-located with the
+    # registry; the anchor deliberately lives in a separate file.
+    now = time.time()
+    prev_states = {name: classify(entry_age(registry, name, now), False,
+                                  args.stale_s)
+                   for name in registry["devices"]}
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_nf: stop.set())
+    print("fleet: daemon start pid=%d devices=%s registry=%s audit=%s "
+          "anchor=%s interval=%gs stale_s=%gs"
+          % (os.getpid(), args.devices, args.registry, audit_path,
+             anchor_path, args.interval, args.stale_s), file=sys.stderr)
+    rounds = 0
+    while not stop.is_set():
+        rounds += 1
+        devices_r, manifest_r, err = load_devices(args.devices)
+        if err:      # manifest broke mid-run: stay resident, retry later
+            print("fleet: round %d: devices: %s (retrying next interval)"
+                  % (rounds, err), file=sys.stderr)
+            stop.wait(args.interval)
+            continue
+        now = time.time()
+        rows = probe_round_rows(devices_r, registry, args.probe, reports_dir,
+                                default_runner, args.timeout_s,
+                                args.stale_s, now)
+        states = {r["device"]: r["state"] for r in rows}
+        for name, prev, cur in diff_states(prev_states, states):
+            print("fleet: *** STATE %s: %s -> %s ***"
+                  % (name, prev or "new", cur or "GONE"), file=sys.stderr)
+        print_table(rows)
+        registry["updated_ts"] = round(time.time(), 3)
+        registry["manifest_sha256_16"] = manifest_r
+        save_err = save_registry(args.registry, registry)
+        if save_err:
+            print("fleet: %s" % save_err, file=sys.stderr)
+        counts = {s: sum(1 for r in rows if r["state"] == s)
+                  for s in (ONLINE, STALE, OFFLINE)}
+        print("fleet: round %d: %d device(s): %d ONLINE, %d STALE, "
+              "%d OFFLINE (interval=%gs)"
+              % (rounds, len(rows), counts[ONLINE], counts[STALE],
+                 counts[OFFLINE], args.interval), file=sys.stderr)
+        # A2 residual, automated: chain the round onto the fleet audit and
+        # anchor the new tail into a separate, externally comparable file.
+        ev = round_event(rounds, states, manifest_r, time.time())
+        tail, seq, aerr = append_audit_event(audit_path, ev)
+        if aerr:
+            print("fleet: *** AUDIT APPEND FAILED — %s (round %d NOT "
+                  "anchored) ***" % (aerr, rounds), file=sys.stderr)
+        else:
+            anchor_ts = time.time()
+            aerr = save_anchor(anchor_path,
+                               anchor_text(tail, seq, audit_path, anchor_ts))
+            if aerr:
+                print("fleet: *** ANCHOR WRITE FAILED — %s (tail "
+                      "sha256_16=%s seq=%d NOT anchored) ***"
+                      % (aerr, tail, seq), file=sys.stderr)
+            else:
+                print("fleet: anchored audit tail sha256_16=%s seq=%d -> %s"
+                      % (tail, seq, anchor_path), file=sys.stderr)
+        prev_states = states
+        stop.wait(args.interval)   # returns at once when a signal fired
+    print("fleet: daemon exit after %d round(s) (graceful)" % rounds,
+          file=sys.stderr)
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -775,6 +1028,62 @@ def cmd_selftest(_args) -> int:
               {"name": "x", "transport": "ssh",
                "ssh": {"host": "h", "port": "22"}}]})[1] is not None)
 
+    # --- daemon pure core: round diff, A2 chain, anchor assembly --- #
+    diff = diff_states({"jetson": ONLINE, "bi150": STALE},
+                       {"bi150": STALE, "jetson": STALE, "bi100": ONLINE})
+    check("daemon.diff_transition_and_new",
+          diff == [("bi100", None, ONLINE), ("jetson", ONLINE, STALE)],
+          str(diff))
+    check("daemon.diff_no_change_is_empty",
+          diff_states({"a": ONLINE, "b": OFFLINE},
+                      {"b": OFFLINE, "a": ONLINE}) == [])
+    check("daemon.diff_first_round_all_new",
+          diff_states({}, {"a": OFFLINE, "b": ONLINE})
+          == [("a", None, OFFLINE), ("b", None, ONLINE)],
+          str(diff_states({}, {"a": OFFLINE, "b": ONLINE})))
+    check("daemon.diff_reports_gone_device",
+          diff_states({"x": STALE, "y": ONLINE}, {"y": ONLINE})
+          == [("x", STALE, None)])
+
+    check("daemon.audit_line_sha_excludes_newline",
+          audit_line_sha('{"a":1}\n') == audit_line_sha('{"a":1}')
+          and len(audit_line_sha("x")) == 16)
+    prev_line = '{"event":"FLEET_ROUND","seq":1}'
+    check("daemon.chain_link_hashes_prev_raw_bytes",
+          chain_link(prev_line, 2) == {"seq": 2,
+                                       "prev_sha256_16":
+                                       audit_line_sha(prev_line)})
+    check("daemon.chain_link_fresh_chain_null_prev",
+          chain_link(None, 1) == {"seq": 1, "prev_sha256_16": None})
+    check("daemon.audit_tail_raw_last_line_and_seq",
+          audit_tail_raw("row-a\n\nrow-b\n") == ("row-b", 0)
+          and audit_tail_raw('row-a\n{"seq":7}\n') == ('{"seq":7}', 7)
+          and audit_tail_raw("") == (None, 0)
+          and audit_tail_raw("legacy\n") == ("legacy", 0))
+    ev = round_event(3, {"b": STALE, "a": ONLINE}, "0123456789abcdef",
+                     1760000000.0)
+    check("daemon.round_event_shape",
+          ev == {"event": "FLEET_ROUND", "round": 3, "ts": 1760000000.0,
+                 "utc": "2025-10-09T08:53:20Z", "states": {"a": ONLINE,
+                                                           "b": STALE},
+                 "manifest_sha256_16": "0123456789abcdef"}, str(ev))
+    anchor = anchor_text("9a4c1f2e3d5b6a70", 4, "results/fleet/audit.jsonl",
+                         1760000000.0)
+    check("daemon.anchor_assembly_exact",
+          anchor == json.dumps(
+              {"schema": "fleet-anchor/1",
+               "audit_path": "results/fleet/audit.jsonl",
+               "tail_sha256_16": "9a4c1f2e3d5b6a70", "seq": 4,
+               "updated_ts": 1760000000.0,
+               "updated_utc": "2025-10-09T08:53:20Z"},
+              ensure_ascii=False, sort_keys=True) + "\n",
+          repr(anchor))
+    check("daemon.anchor_is_one_line_and_separate_file",
+          anchor.count("\n") == 1
+          and FLEET_ANCHOR_NAME != FLEET_AUDIT_NAME
+          and FLEET_ANCHOR_NAME.endswith(".anchor")
+          and SHA16_RE.match(json.loads(anchor)["tail_sha256_16"]) is not None)
+
     print("selftest: %d failure(s)" % len(failures))
     return 1 if failures else 0
 
@@ -821,6 +1130,33 @@ def main(argv=None) -> int:
                       help="same freshness window as check "
                            "(default: %(default)s)")
 
+    ap_d = sub.add_parser(
+        "daemon", help="resident loop: the check round every --interval, "
+                       "loud STATE-change events, each round chained onto "
+                       "the fleet audit with its tail sha256_16 written to "
+                       "a separate anchor file (SIGTERM/SIGINT exit "
+                       "gracefully)")
+    ap_d.add_argument("--devices", required=True, help="devices/1 manifest")
+    ap_d.add_argument("--registry", default=DEFAULT_REGISTRY,
+                      help="fleet-registry/1 path (default: %(default)s); "
+                           "the daemon audit lives beside it as "
+                           + FLEET_AUDIT_NAME)
+    ap_d.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S,
+                      help="seconds between check rounds "
+                           "(default: %(default)s)")
+    ap_d.add_argument("--anchor", default=None,
+                      help="file receiving the audit tail sha256_16 each "
+                           "round — keep a copy OFF-HOST (default: "
+                           + FLEET_ANCHOR_NAME + " beside the registry)")
+    ap_d.add_argument("--stale-s", type=float, default=DEFAULT_STALE_S,
+                      help="same freshness window as check "
+                           "(default: %(default)s)")
+    ap_d.add_argument("--probe", default=probe_default,
+                      help="probe.py to ship/run (default: beside fleet.py)")
+    ap_d.add_argument("--timeout-s", type=float, default=DEFAULT_TIMEOUT_S,
+                      help="per subprocess step, per device "
+                           "(default: %(default)s)")
+
     sub.add_parser("selftest", help="pure-function self-test "
                                     "(stub runner, no devices touched)")
 
@@ -833,6 +1169,8 @@ def main(argv=None) -> int:
         return cmd_check(args)
     if args.cmd == "status":
         return cmd_status(args)
+    if args.cmd == "daemon":
+        return cmd_daemon(args)
     ap.print_help()
     return 2
 

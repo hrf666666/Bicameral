@@ -1,0 +1,17 @@
+# OnFailure handler for bicameral-fleet.service: pulled in by
+# `OnFailure=bicameral-fleet-failure@%n.service` (%i = the failed unit).
+# Deliberately dumb and dependency-free: one timestamped marker line per
+# failure, so a flapping daemon leaves an on-disk trail even if nobody is
+# watching the journal. Check with:
+#     tail /var/lib/bicameral/fleet/failures.log
+#     journalctl -u bicameral-fleet -n 100
+
+[Unit]
+Description=Record failure of %i into the bicameral fleet failure log
+
+[Service]
+Type=oneshot
+# %% escapes: systemd expands specifiers (%) before the shell sees the line.
+# Failure detail lives in the journal (journalctl -u bicameral-fleet); this
+# log is only the on-disk "someone should look" trail.
+ExecStart=/bin/sh -c 'mkdir -p /var/lib/bicameral/fleet && echo "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ) FAILED %i" >> /var/lib/bicameral/fleet/failures.log'

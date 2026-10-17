@@ -1,0 +1,128 @@
+{
+  "schema": "bench/1",
+  "device": "bi150",
+  "date": "2026-10-18",
+  "generated_at": "2026-10-17T16:21:56.263041+00:00",
+  "tag": "27b-t56-cpu",
+  "engine": {
+    "name": "llama-server (llama.cpp), endpoint http://127.0.0.1:8960/v1"
+  },
+  "model": {
+    "name": "qwen3.8-27b"
+  },
+  "protocol": {
+    "endpoint": "POST /v1/chat/completions (non-stream)",
+    "n_predict": 256,
+    "temperature": 0,
+    "no_think_prefix": true,
+    "runs": 2,
+    "warmup": "1 short request before the measured runs (not counted)"
+  },
+  "power": {
+    "sampler_cmd": "LD_LIBRARY_PATH=/usr/local/iluvatar/lib64 /usr/local/iluvatar/bin/ixsmi --query-gpu=index,gpu.power.draw,board.power.draw --format=csv,noheader",
+    "sampler_interval_s": 1.0,
+    "idle_baseline": {
+      "samples": 5,
+      "n_gpus": 8,
+      "gpu_power_w": {
+        "mean": 41.33,
+        "peak": 46.0,
+        "sum_mean": 330.6,
+        "sum_peak": 331.0
+      },
+      "board_power_w": {
+        "mean": 109.6,
+        "peak": 117.0,
+        "sum_mean": 876.8,
+        "sum_peak": 878.0
+      }
+    },
+    "run_mean_gpu_sum_w": [
+      330.28,
+      330.28
+    ],
+    "run_mean_board_sum_w": [
+      876.09,
+      876.17
+    ],
+    "peak_gpu_sum_w": 331.0,
+    "peak_board_sum_w": 878.0,
+    "sampler_errors": [],
+    "caveat": "inference is CPU-side (-ngl 0, -t 56); ixsmi GPU/board power stays near idle and is recorded as objective telemetry, not as inference energy; no CPU/socket power meter available on this host (no RAPL/tegrastats for Xeon)"
+  },
+  "per_run": [
+    {
+      "wall_s": 46.504,
+      "ttft_ms": 46503.76,
+      "prompt_n": 4,
+      "predicted_n": 256,
+      "decode_tps": 5.527124580629422,
+      "prefill_tps": 11.011821190047517,
+      "ttft_server_ms": 363.246,
+      "finish_reason": "length",
+      "run": 1,
+      "power_during_run": {
+        "samples": 47,
+        "n_gpus": 8,
+        "gpu_power_w": {
+          "mean": 41.28,
+          "peak": 46.0,
+          "sum_mean": 330.28,
+          "sum_peak": 331.0
+        },
+        "board_power_w": {
+          "mean": 109.51,
+          "peak": 117.0,
+          "sum_mean": 876.09,
+          "sum_peak": 878.0
+        }
+      }
+    },
+    {
+      "wall_s": 46.962,
+      "ttft_ms": 46962.1,
+      "prompt_n": 4,
+      "predicted_n": 256,
+      "decode_tps": 5.511006333313314,
+      "prefill_tps": 11.037009853290547,
+      "ttft_server_ms": 362.417,
+      "finish_reason": "length",
+      "run": 2,
+      "power_during_run": {
+        "samples": 46,
+        "n_gpus": 8,
+        "gpu_power_w": {
+          "mean": 41.29,
+          "peak": 46.0,
+          "sum_mean": 330.28,
+          "sum_peak": 331.0
+        },
+        "board_power_w": {
+          "mean": 109.52,
+          "peak": 117.0,
+          "sum_mean": 876.17,
+          "sum_peak": 878.0
+        }
+      }
+    }
+  ],
+  "summary": {
+    "decode_tps": {
+      "mean": 5.519,
+      "min": 5.511006333313314,
+      "max": 5.527124580629422
+    },
+    "ttft_ms": {
+      "mean": 362.83
+    },
+    "power_w": {
+      "gpu_sum_mean": 330.28,
+      "gpu_sum_peak": 331.0,
+      "board_sum_mean": 876.13,
+      "board_sum_peak": 878.0
+    }
+  },
+  "notes": [
+    "bench/1-style record: summary.decode_tps.mean / summary.ttft_ms.mean are router-compatible facts; power section is additive"
+  ]
+}

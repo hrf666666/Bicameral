@@ -1,0 +1,73 @@
+# Strata spec 对齐尝试（lite）— 现场记录（verbatim 摘录）
+
+日期：2026-10-17 深夜（bi150 本地时间 00:23-02:23 窗口）
+结论：未完成——引擎在 banner 后、`PCIe probe` 前挂起，routing trace 无法产出，make_profile 对比未执行。
+
+## 目标命令形态（与 gate3c 成功 run 同构 + --dump-routing）
+
+```
+export LD_LIBRARY_PATH=/usr/local/corex-4.4.0/lib64:/usr/local/iluvatar/lib64
+cd /root/strata
+./build-iluvatar/strata \
+  --pack /private/models/strata-packs/qwen3.8-flash-next-iq2xs \
+  --native /root/exp-sideload/shard/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf \
+  --ple-gguf /root/exp-sideload/shard/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00002-of-00002.gguf \
+  --tokens "22525,9826,314,4437,1303,41979,5134" \
+  --spec 4 --expert-profile /root/strata/profile-default.bin --max-new 16 --gpu 0 \
+  --dump-routing /tmp/strata-spec-exp/routing-trace-run1.bin
+```
+
+变体矩阵（全部挂起，全部只产出 174 字节单行 banner 日志）：
+1. 00:23 --tokens-file 1024 tokens --prefill 1024 --max-new 64（timeout 1500 → exit 124）
+2. 00:48 同上改 64-token 提示 --prefill 64 --max-new 16 --stats（exit 124）
+3. 00:57 --gpu 1、7-token 内联、无 --prefill（probe1.log，exit 124）
+4. 01:08 attempt 1（= 3 的 --gpu 0 版，exit 124）
+5. 01:12 attempt 2（exit 124，但 SIGTERM 后进程不退，实测需 SIGKILL）
+6. 01:16 attempt 3（被清理 SIGKILL → 137）
+7. 01:23 attempt 4（清理时 SIGKILL）
+8. 01:34 CUDA_VISIBLE_DEVICES=0 外部隔离 + 无 --gpu 参数（isolated.log，exit 124）
+9. 01:38 最终长窗尝试（timeout -k 5 2700，--gpu 0 + --dump-routing，结果见文末回填）
+
+## 挂起现场（/proc 证据，01:21 实测 attempt-2 进程 55330）
+
+- 主线程 wchan=hrtimer_nanosleep，第二线程 futex_wait_queue_me；仅 2 线程
+- VmRSS 25,640 kB（pack 1.5 GB / arena 33 GiB 均未开始加载）；rchar 621 KB
+- utime/stime 358→392 ticks 缓慢增长（间歇自旋）
+- `fuser /dev/iluvatar*`：该进程持全部 8 卡 fd；无其他进程持卡
+- SIGTERM 无效：timeout 240 到点后 timeout 与 strata 均存活，直到手工 SIGKILL
+
+## 日志形态（每个挂起 run 的全部输出，逐字）
+
+```
+strata: ivcore port: the adaptive tier defaults to off (--adapt-every 0): a swap poisons the captured verify windows here; pass --adapt-every N to re-enable at your own risk
+```
+
+（健康 run——gate3c.log 22:24——此行之后 1 秒内即打印 `strata generate: PCIe probe: 28.0 GB/s ...`，随后加载 pack/PLE/head 并出 speculation 统计：`16 rounds of 6, drafts accepted 0 of 45 (0.000)`。）
+
+## 排除项（本轮实测）
+
+- 参数期正常：`strata --tokens "1,2,3"`（缺 --ple-gguf）立即 exit=2 并报错——banner 后代码可达
+- CUDA 运行时健康：corex bandwidthTest --device=0..7 单卡全部完成初始化并跑通（6 号卡初始化拖到分钟级，0-5/7 秒级；--mode=quick）
+- 内存充裕：free -g 显示 available 981 GB
+- 无 GPU 竞争者：drude 批处理（8 进程 ~100% CPU，`research/spatial1/drude_ball_ledger_batch_driver_v1.py`）不持 GPU；fuser 仅见本方挂起进程
+- dmesg：本机历史 XID 22/24/47、strata 段错误/一般保护错均为远早于本轮的旧记录；本轮无新增驱动错误
+
+## 时间线相关性（如实，因果未证）
+
+- gate3.log 22:14:01 成功（prefill 368 ms, 16 rounds）
+- gate3c.log 22:24:59 成功（含 --expert-profile profile-default.bin，speculation 0 of 45）
+- gate4.log 21:58 / gate3b.log 22:17 仅 banner（历史挂起先例）
+- drude 批处理 23:57:13 启动（wrapper pid 52582，`nohup bash -c 'python3 -u ...drude...full; ...' `）
+- 本轮 9 次尝试（00:23 起）全部挂起
+- CPU 总负载 ~10/112 核、内存 981 GB 可用、GPU 全部 0% util——资源饱和假说证据不足，机理未定位
+
+## 红线遵守
+
+- 未 SIGSTOP/SIGKILL/renice 他人 drude 作业
+- 全部自起 strata 进程以 SIGKILL 清理（见各 EXIT 码：124×4、137×2 等），清理后 `pgrep strata` 仅剩历史僵尸
+- bi150 红线服务（22/8080/8181、18000/18001、8960）全程未触碰
+
+## 最终长窗尝试结果（已回填）
+
+exit=124（timeout -k 5 2700 打满 45 分钟，02:23），日志仍只有单行 banner，`routing-trace-run1.bin` 未生成。
+本档尝试总计 **10 次**（00:23-02:23），0 次通过 PCIe probe。spec 对齐对比未达成，如实入档。

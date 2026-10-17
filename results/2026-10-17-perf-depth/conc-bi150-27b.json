@@ -1,0 +1,118 @@
+{
+  "schema": "conc-bench/1",
+  "kind": "llm",
+  "tag": "",
+  "generated_at": "2026-10-17T16:19:52.044348+00:00",
+  "target": {
+    "llm_url": "http://127.0.0.1:8960/v1",
+    "model": "qwen3.8-27b"
+  },
+  "protocol": {
+    "prompt": "/no_think Write a short paragraph about the history of computing. Keep it factual and under 60 words.",
+    "max_tokens": 64,
+    "temperature": 0,
+    "stream": true,
+    "duration_s_per_level": 20,
+    "ttft_definition": "first SSE content chunk minus request sent"
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "duration_s_target": 20,
+      "wall_s": 24.466,
+      "requests_completed": 2,
+      "requests_failed": 0,
+      "rps": 0.0817,
+      "latency_s": {
+        "mean": 12.2323,
+        "p50": 11.73270368995145,
+        "p95": 12.731802531983703,
+        "min": 11.73270368995145,
+        "max": 12.731802531983703
+      },
+      "ttft_s": {
+        "mean": 0.8364,
+        "p50": 0.3707318080123514
+      },
+      "completion_tokens_total": 128,
+      "aggregate_decode_tps": 5.232,
+      "mean_worker_busy_fraction": 0.9999,
+      "per_request_server_decode_tps": [
+        5.511973537627488,
+        5.54473110606472
+      ],
+      "errors_sample": []
+    },
+    {
+      "concurrency": 2,
+      "duration_s_target": 20,
+      "wall_s": 28.278,
+      "requests_completed": 4,
+      "requests_failed": 0,
+      "rps": 0.1415,
+      "latency_s": {
+        "mean": 14.1385,
+        "p50": 14.391730905976146,
+        "p95": 14.576433317968622,
+        "min": 13.699887569062412,
+        "max": 14.576433317968622
+      },
+      "ttft_s": {
+        "mean": 1.1789,
+        "p50": 1.1924540910404176
+      },
+      "completion_tokens_total": 256,
+      "aggregate_decode_tps": 9.053,
+      "mean_worker_busy_fraction": 1.0,
+      "per_request_server_decode_tps": [
+        4.772962304961986,
+        4.896173531581213,
+        4.889049235907567,
+        4.889315975382061
+      ],
+      "errors_sample": []
+    },
+    {
+      "concurrency": 4,
+      "duration_s_target": 20,
+      "wall_s": 20.241,
+      "requests_completed": 4,
+      "requests_failed": 0,
+      "rps": 0.1976,
+      "latency_s": {
+        "mean": 20.137,
+        "p50": 20.23835920006968,
+        "p95": 20.24044130113907,
+        "min": 20.033465139800683,
+        "max": 20.24044130113907
+      },
+      "ttft_s": {
+        "mean": 2.4442,
+        "p50": 2.830548444064334
+      },
+      "completion_tokens_total": 256,
+      "aggregate_decode_tps": 12.648,
+      "mean_worker_busy_fraction": 0.9949,
+      "per_request_server_decode_tps": [
+        3.5044678070687008,
+        3.5041559289317132,
+        3.619112845144883,
+        3.6191423678118304
+      ],
+      "errors_sample": []
+    }
+  ],
+  "decay": {
+    "rps_by_concurrency": {
+      "1": 0.0817,
+      "2": 0.1415,
+      "4": 0.1976
+    },
+    "rps_c2_over_c1": 1.732,
+    "rps_c4_over_c1": 2.419
+  },
+  "notes": [
+    "temperature 0 greedy; every request prefills fresh (no cache warm-up across requests)",
+    "rps counts fully completed requests inside the wall window; requests still in flight at stop are aborted and counted neither as completed nor failed"
+  ]
+}

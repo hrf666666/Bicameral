@@ -1,0 +1,406 @@
+{
+  "schema": "probe/1",
+  "generated_at": "2026-10-17T16:17:45Z",
+  "probe": {
+    "path": "/tmp/bicameral-seg/probe.py",
+    "sha256_16": "ab545930218054d4",
+    "args": {
+      "no_egress": false,
+      "verify_hashes": false,
+      "model_dirs": []
+    }
+  },
+  "fingerprint": {
+    "machine_id": "b0d995b9acec4b1c87e57c8dd8d7ff02",
+    "probe_sha256_16": "ab545930218054d4",
+    "fingerprint_id": "b0d995b9acec4b1c87e57c8dd8d7ff02-ab545930218054d4"
+  },
+  "hardware": {
+    "host": {
+      "hostname": "ai-exp-zb2557126-bi100-pod-unui-c65ccdccd-7nbgw",
+      "arch": "x86_64",
+      "cpu_model": "Hygon C86 7390 32-core Processor",
+      "cpu_cores": 128,
+      "mem_total_bytes": 540920238080,
+      "mem_total_human": "503.8GiB"
+    },
+    "platform": null,
+    "tegra_release": null,
+    "unified_memory": {
+      "value": null,
+      "evidence": "no detectable signal"
+    },
+    "accelerators": [
+      {
+        "vendor_key": "Iluvatar",
+        "display": "Iluvatar",
+        "evidence": {
+          "dev_nodes": {
+            "dev_nodes": [
+              "/dev/iluvatar0",
+              "/dev/iluvatar1"
+            ],
+            "device_instances": 2
+          }
+        }
+      }
+    ],
+    "accel_enumeration_order": [
+      "/dev node scan",
+      "lspci vendor table",
+      "vendor tools"
+    ],
+    "dev_nodes_by_vendor": {
+      "Iluvatar": {
+        "dev_nodes": [
+          "/dev/iluvatar0",
+          "/dev/iluvatar1"
+        ],
+        "device_instances": 2
+      }
+    },
+    "lspci": {
+      "tool": "lspci",
+      "status": "absent",
+      "error": "executable not found: lspci"
+    },
+    "vendor_tools": [
+      {
+        "tool": "nvidia-smi",
+        "vendor": "NVIDIA",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "tegrastats",
+        "vendor": "NVIDIA platform",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "jetson_clocks",
+        "vendor": "NVIDIA platform",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "ixsmi",
+        "vendor": "Iluvatar",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "npu-smi",
+        "vendor": "Ascend",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "rocm-smi",
+        "vendor": "AMD-Hygon",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "hy-smi",
+        "vendor": "AMD-Hygon",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "musa-smi",
+        "vendor": "Moore-Threads",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      },
+      {
+        "tool": "mthreads-gmi",
+        "vendor": "Moore-Threads",
+        "status": "absent",
+        "searched": [
+          "PATH"
+        ]
+      }
+    ]
+  },
+  "stack": {
+    "os": {
+      "pretty_name": "Ubuntu 22.04.5 LTS",
+      "version_id": "22.04",
+      "id": "ubuntu"
+    },
+    "kernel": "5.4.0-125-generic",
+    "container": {
+      "dot_dockerenv": true,
+      "dot_containerenv": false,
+      "cgroup_hits": [
+        "docker",
+        "kubepods"
+      ],
+      "kubernetes_env": false,
+      "is_container": true
+    },
+    "runtimes": {
+      "cuda": {
+        "status": "absent",
+        "searched": [
+          "PATH",
+          "/usr/local/cuda/bin",
+          "/usr/local/cuda-*/bin"
+        ]
+      },
+      "nvidia_smi_reported": null,
+      "rocm": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/rocm*/.info/version",
+          "/opt/rocm*/.info/version"
+        ]
+      },
+      "cann": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/[Aa]scend/ascend-toolkit/latest/version.cfg",
+          "/usr/local/[Aa]scend/nnal/atb/latest/version.cfg",
+          "/usr/local/[Aa]scend/aascend-toolkit/latest/version.cfg"
+        ]
+      },
+      "corex": {
+        "status": "absent",
+        "searched": [
+          "/usr/local/corex*/version",
+          "/usr/local/corex*/version.*",
+          "/usr/local/corex*/release-corex.txt"
+        ]
+      }
+    },
+    "python": {
+      "version": "3.10.12",
+      "executable": "/usr/bin/python3",
+      "venv_importable": true,
+      "ensurepip_importable": false
+    },
+    "egress": {
+      "targets": {
+        "github_ssh_443": {
+          "status": "up",
+          "latency_ms": 74
+        },
+        "hf_mirror": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 215
+        },
+        "github": {
+          "status": "up",
+          "http_status": 206,
+          "latency_ms": 226
+        },
+        "hf": {
+          "status": "down",
+          "error": "URLError: <urlopen error [Errno 99] Cannot assign requested address>",
+          "latency_ms": 5008
+        },
+        "pypi": {
+          "status": "down",
+          "error": "URLError: <urlopen error [Errno 99] Cannot assign requested address>",
+          "latency_ms": 20030
+        }
+      },
+      "summary": "pypi:down hf:down hf_mirror:up github:up github_ssh_443:up"
+    }
+  },
+  "installed": {
+    "engines": [
+      {
+        "name": "llama-server",
+        "status": "absent",
+        "searched_dir_count": 8
+      },
+      {
+        "name": "vllm",
+        "status": "absent",
+        "searched_dir_count": 8,
+        "python_package_version": null
+      },
+      {
+        "name": "strata",
+        "status": "absent",
+        "searched_dir_count": 8
+      }
+    ],
+    "models": {
+      "roots_considered": [
+        {
+          "path": "/data/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/opt/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/mnt/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/srv/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/workspace/models",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/root/.cache/huggingface/hub",
+          "exists": false,
+          "origin": "convention"
+        },
+        {
+          "path": "/root/.cache/lm-studio/models",
+          "exists": false,
+          "origin": "convention"
+        }
+      ],
+      "roots_scanned": [],
+      "count": 0,
+      "count_note": "complete",
+      "truncated": false,
+      "total_bytes": 0,
+      "total_human": "0.0B",
+      "by_format": {
+        "gguf": 0,
+        "safetensors": 0
+      },
+      "models": []
+    },
+    "services": {
+      "tool": "ss",
+      "status": "absent",
+      "error": "executable not found: ss",
+      "truncated": false,
+      "note": "neither ss nor netstat available; listening services unknown"
+    }
+  },
+  "segmentation": {
+    "tools": [
+      {
+        "name": "itrctl",
+        "path": null,
+        "status": "absent",
+        "capabilities": [],
+        "searched": [
+          "PATH",
+          "/usr/local|opt/{iluvatar,corex}/bin"
+        ]
+      },
+      {
+        "name": "ixsmi",
+        "path": "/usr/local/iluvatar/bin/ixsmi",
+        "status": "present",
+        "capabilities": [
+          "vgpu.subcommand",
+          "vgpu.query",
+          "vgpu.utilization",
+          "vgpu.process_monitor",
+          "vgpu.supported_list",
+          "vgpu.creatable_list",
+          "vgpu.verbose"
+        ],
+        "vgpu_listings": [
+          {
+            "cards": 0,
+            "card_ids": [],
+            "unsupported_mode": true,
+            "no_types_markers": 0,
+            "type_rows": 0,
+            "other_lines": [],
+            "active_vgpus_total": null,
+            "flag": "-s"
+          },
+          {
+            "cards": 0,
+            "card_ids": [],
+            "unsupported_mode": true,
+            "no_types_markers": 0,
+            "type_rows": 0,
+            "other_lines": [],
+            "active_vgpus_total": null,
+            "flag": "-c"
+          },
+          {
+            "cards": 0,
+            "card_ids": [],
+            "unsupported_mode": true,
+            "no_types_markers": 0,
+            "type_rows": 0,
+            "other_lines": [],
+            "active_vgpus_total": null,
+            "flag": "-q"
+          }
+        ]
+      }
+    ],
+    "vgpu_capable": false,
+    "slicing_method": null,
+    "notes": [
+      "ixsmi vgpu subcommand exposes only query flags (q/u/p/s/c/v/l per its own -h); no create/destroy option exists in any --help — no documented reversible CLI segmentation path",
+      "/usr/local/iluvatar/lib64/libixml.so carries MIG-style C-API symbols (nvmlDeviceCreateGpuInstance[WithPlacement]/nvmlGpuInstanceCreateComputeInstance + matching *Destroy) and vGPU query APIs — C-API evidence only, no CLI wrapper found on this machine",
+      "vgpu_capable=false as observed from inside this container/host: -s:unsupported_mode; -c:unsupported_mode; -q:unsupported_mode — vGPU provisioning is host-level and 0 types are visible here; host-side state may differ",
+      "controlled create→destroy experiment NOT performed: no tool's own documentation exposes a reversible segmentation path (irreversible/unclear territory — capabilities recorded only)"
+    ],
+    "dev_channels": [
+      {
+        "node": "/dev/itrctl",
+        "present": false,
+        "major": 235
+      },
+      {
+        "node": "/dev/itrlink",
+        "present": false,
+        "major": 234
+      }
+    ],
+    "lib_api_symbols": [
+      "nvmlDeviceGetSupportedVgpus",
+      "nvmlDeviceGetCreatableVgpus",
+      "nvmlDeviceGetActiveVgpus",
+      "nvmlDeviceCreateGpuInstance",
+      "nvmlGpuInstanceCreateComputeInstance",
+      "nvmlComputeInstanceDestroy",
+      "nvmlGpuInstanceDestroy",
+      "nvmlSetVgpuVersion"
+    ],
+    "lib_path": "/usr/local/iluvatar/lib64/libixml.so"
+  },
+  "install_state": [],
+  "notes": [
+    "no --appspec supplied (standalone run): install_state is defined against master-issued appspec/1, reported as []"
+  ]
+}

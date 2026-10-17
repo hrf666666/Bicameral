@@ -1,0 +1,64 @@
+# Bicameral fleet heartbeat daemon (pull mode) — resident fleet.py daemon.
+#
+# What it runs:   python3 bicameral/fleet.py daemon
+#   - one check round every BICAMERAL_INTERVAL seconds (probe/1 pulled from
+#     every device through its transport),
+#   - loud STATE-change events per transition (journalctl-visible),
+#   - every round chained onto the fleet audit (<registry dir>/audit.jsonl,
+#     A2 seq+prev_sha256_16 chain) with the chain tail sha256_16 anchored
+#     into the separate BICAMERAL_ANCHOR file — keep a copy of that file
+#     OFF-HOST (README: one-line cron) so last-row audit deletion on this
+#     host becomes externally visible.
+#
+# All paths are environment variables: override them without editing this
+# unit via /etc/default/bicameral-fleet (see README.md), then
+# `systemctl daemon-reload && systemctl restart bicameral-fleet`.
+#
+# Install (three steps) in README.md next to this file.
+
+[Unit]
+Description=Bicameral fleet heartbeat daemon (pull-mode checks + audit tail anchoring)
+Documentation=file:///opt/bicameral/deploy/systemd/README.md
+# Probes are master-initiated (pull): outbound reachability is what matters.
+After=network-online.target
+Wants=network-online.target
+# StartLimit* live in [Unit] (also honoured by older systemd there).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+OnFailure=bicameral-fleet-failure@%n.service
+
+[Service]
+Type=simple
+# Run unprivileged on purpose: the daemon only writes its own state dir and
+# spawns python3/ssh/scp as this user. Create it once (README step 0).
+User=bicameral
+Group=bicameral
+WorkingDirectory=/opt/bicameral
+Environment=PYTHONUNBUFFERED=1
+# Operator overrides (optional file; values here are the defaults).
+EnvironmentFile=-/etc/default/bicameral-fleet
+Environment=BICAMERAL_HOME=/opt/bicameral
+Environment=BICAMERAL_DEVICES=/opt/bicameral/examples/devices.json
+Environment=BICAMERAL_REGISTRY=/var/lib/bicameral/fleet/registry.json
+Environment=BICAMERAL_ANCHOR=/var/lib/bicameral/fleet/audit.anchor
+Environment=BICAMERAL_INTERVAL=300
+ExecStart=/usr/bin/python3 ${BICAMERAL_HOME}/bicameral/fleet.py daemon \
+    --devices ${BICAMERAL_DEVICES} \
+    --registry ${BICAMERAL_REGISTRY} \
+    --anchor ${BICAMERAL_ANCHOR} \
+    --interval ${BICAMERAL_INTERVAL}
+# A crash (bad manifest, disk full, OOM) is retried with backoff; a clean
+# SIGTERM exit 0 is NOT restarted. OnFailure (see [Unit]) drops a marker so
+# a flapping unit is impossible to miss (bicameral-fleet-failure@.service).
+Restart=on-failure
+RestartSec=10s
+# The daemon exits gracefully on SIGTERM after finishing the current round
+# (evidence + anchor stay consistent); give it time to close the round.
+TimeoutStopSec=120s
+SyslogIdentifier=bicameral-fleet
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

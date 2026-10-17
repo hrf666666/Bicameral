@@ -9,6 +9,12 @@ Single process, two ThreadingHTTPServer planes:
     control plane : 0.0.0.0:18000   POST /issue   GET /audit /capabilities /healthz
     agent plane   : 0.0.0.0:18001   POST /agent/invoke
 
+Optional TLS data plane (deploy/tls/README.md): --tls-cert + --tls-key wrap
+BOTH planes in TLS (get_request wraps each accepted socket); --tls-client-ca
+additionally requires and verifies client certificates (mTLS). Off by
+default — without a certificate the plain-HTTP behaviour is unchanged; when
+on, /healthz stays token-free but rides the same TLS.
+
 Python 3.11+/3.12, standard library only (no packages, no venv).
 
 PoC simplifications (production replacements live in docs/architecture-v2.md
@@ -54,6 +60,7 @@ import json
 import os
 import re
 import secrets
+import ssl
 import sys
 import threading
 import time
@@ -909,6 +916,53 @@ def enforce(tok_str, plane, req):
 
 
 # --------------------------------------------------------------------------- #
+# TLS data plane (optional, off by default — backward compatible)
+#   --tls-cert + --tls-key (both or neither)  : both planes serve TLS
+#   --tls-client-ca                            : additionally require and
+#                                                verify client certificates
+#                                                (mTLS) on BOTH planes
+# /healthz stays token-free but rides the same TLS. The default plain-HTTP
+# behaviour is byte-for-byte unchanged when no certificate is given.
+# --------------------------------------------------------------------------- #
+
+TLS_HANDSHAKE_TIMEOUT = 10                    # bound a stalled TLS handshake
+
+
+def tls_mode(cert, key, client_ca):
+    """Validate the --tls-* argument combination (pure; selftest-covered).
+
+    Returns (mode, error): mode is "off" / "tls" / "mtls", error a
+    user-facing message or None. Only the combination is decided here —
+    file existence is checked in main() so the selftest stays I/O-free.
+    Half a certificate pair (e.g. --tls-cert without --tls-key) is a
+    startup error, never a silent fallback to plain HTTP.
+    """
+    c, k, ca = bool(cert), bool(key), bool(client_ca)
+    if c != k:
+        return None, ("--tls-cert and --tls-key must be given together "
+                      "(missing --tls-%s)" % ("key" if c else "cert"))
+    if ca and not (c and k):
+        return None, "--tls-client-ca requires --tls-cert and --tls-key"
+    if not c:
+        return "off", None
+    return ("mtls" if ca else "tls"), None
+
+
+def build_ssl_context(cert, key, client_ca):
+    """Server-side SSLContext: the server certificate, plus mandatory
+    client-certificate verification when a client CA is configured (mTLS).
+    Only called when tls_mode() returned a non-"off" mode."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=cert, keyfile=key)
+    if client_ca:
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        ctx.load_verify_locations(cafile=client_ca)
+    else:
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+# --------------------------------------------------------------------------- #
 # HTTP planes
 # --------------------------------------------------------------------------- #
 
@@ -1138,6 +1192,34 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    tls_context = None              # set per-instance in main() when TLS is on
+
+    def __init__(self, *args, tls_context=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if tls_context is not None:
+            self.tls_context = tls_context
+
+    def get_request(self):
+        """accept(), then TLS-wrap the connection server-side when enabled.
+
+        The handshake runs here (bounded by TLS_HANDSHAKE_TIMEOUT so a
+        client that connects and stalls cannot pin the accept loop); a
+        failed handshake — e.g. a missing client certificate under mTLS —
+        raises ssl.SSLError (an OSError), which _handle_request_noblock
+        swallows: the connection is dropped, the planes keep serving.
+        """
+        sock, addr = self.socket.accept()
+        if self.tls_context is None:
+            return sock, addr
+        sock.settimeout(TLS_HANDSHAKE_TIMEOUT)
+        try:
+            return self.tls_context.wrap_socket(sock, server_side=True), addr
+        except (ssl.SSLError, OSError):
+            try:
+                sock.close()
+            except OSError:
+                pass
+            raise
 
 
 class ControlServer(Server):
@@ -1146,6 +1228,45 @@ class ControlServer(Server):
 
 class AgentServer(Server):
     plane = "agent"
+
+
+# --------------------------------------------------------------------------- #
+# selftest — pure functions only (no network, no TLS handshake, no files)
+# --------------------------------------------------------------------------- #
+
+def cmd_selftest(_args) -> int:
+    failures = []
+
+    def check(name, cond, detail=""):
+        if cond:
+            print("ok   %s" % name)
+        else:
+            failures.append(name)
+            print("FAIL %s %s" % (name, detail))
+
+    # --- TLS argument combination matrix (tls_mode is the whole contract:
+    #     half a pair must refuse to start, never fall back to plain HTTP) --- #
+    check("tls.off_by_default",
+          tls_mode(None, None, None) == ("off", None))
+    check("tls.tls_with_cert_and_key",
+          tls_mode("s.crt", "s.key", None) == ("tls", None))
+    check("tls.mtls_with_client_ca",
+          tls_mode("s.crt", "s.key", "ca.crt") == ("mtls", None))
+    m, e = tls_mode("s.crt", None, None)       # cert without key
+    check("tls.cert_without_key_rejected",
+          m is None and bool(e) and "--tls-key" in e, e or "accepted")
+    m, e = tls_mode(None, "s.key", None)       # key without cert
+    check("tls.key_without_cert_rejected",
+          m is None and bool(e) and "--tls-cert" in e, e or "accepted")
+    m, e = tls_mode(None, None, "ca.crt")      # client CA without a server pair
+    check("tls.ca_without_server_pair_rejected",
+          m is None and bool(e) and "--tls-client-ca" in e, e or "accepted")
+    m, e = tls_mode(None, "s.key", "ca.crt")
+    check("tls.ca_with_half_pair_rejected",
+          m is None and bool(e), e or "accepted")
+
+    print("selftest: %d failure(s)" % len(failures))
+    return 1 if failures else 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1169,7 +1290,19 @@ def main():
                          "(/no_think prefix + chat_template_kwargs)")
     ap.add_argument("--llm-max-tokens", type=int, default=64,
                     help="cap for llm.complete max_tokens (raise for reasoning models)")
+    ap.add_argument("--tls-cert", default=None, metavar="PEM",
+                    help="server certificate; requires --tls-key (both planes serve TLS)")
+    ap.add_argument("--tls-key", default=None, metavar="PEM",
+                    help="server private key; requires --tls-cert")
+    ap.add_argument("--tls-client-ca", default=None, metavar="PEM",
+                    help="CA for client certificates: require + verify them "
+                         "(mTLS); needs --tls-cert/--tls-key")
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the pure-function self-test and exit")
     args = ap.parse_args()
+
+    if args.selftest:
+        return cmd_selftest(args)
 
     DATA_DIR = args.data_dir.rstrip("/")
     DATA_SCOPE = DATA_DIR + "/data"
@@ -1177,6 +1310,19 @@ def main():
     IDEM_DIR = DATA_DIR + "/idem"
     STATE_PATH = DATA_DIR + "/state.json"
     STRATA_URL = args.strata_url.rstrip("/")
+
+    # TLS argument combination first: half a pair must fail the startup
+    # before anything else is validated (selftest-pinned contract).
+    tls, tls_err = tls_mode(args.tls_cert, args.tls_key, args.tls_client_ca)
+    if tls_err:
+        sys.exit("tls: %s" % tls_err)
+    for p in (args.tls_cert, args.tls_key, args.tls_client_ca):
+        if p and not os.path.isfile(p):
+            sys.exit("tls: file not found: %s" % p)
+    tls_ctx = None
+    if tls != "off":
+        tls_ctx = build_ssl_context(args.tls_cert, args.tls_key,
+                                    args.tls_client_ca)
 
     global NO_THINK
     NO_THINK = bool(args.no_think)
@@ -1205,7 +1351,7 @@ def main():
     audit("START", pol_ver=POL_VER, build_sha=BUILD_SHA, control_port=args.control_port,
           agent_port=args.agent_port, strata=STRATA_URL,
           control_auth="token" if ADMIN_TOKEN else "open",
-          master_key_source="env" if os.environ.get("POC_MASTER_KEY") else "dev-default")
+          tls=tls, master_key_source="env" if os.environ.get("POC_MASTER_KEY") else "dev-default")
     threading.Thread(target=state_saver_loop, daemon=True).start()
 
     # startup probe: Strata unreachable -> llm.complete marked degraded, service still starts
@@ -1222,14 +1368,16 @@ def main():
               note="llm.complete degraded; probe thread will recover within 30s")
     threading.Thread(target=strata_probe_loop, daemon=True).start()
 
-    httpd_c = ControlServer(("0.0.0.0", args.control_port), Handler)
-    httpd_a = AgentServer(("0.0.0.0", args.agent_port), Handler)
+    httpd_c = ControlServer(("0.0.0.0", args.control_port), Handler,
+                            tls_context=tls_ctx)
+    httpd_a = AgentServer(("0.0.0.0", args.agent_port), Handler,
+                          tls_context=tls_ctx)
     for d in (httpd_c, httpd_a):
         threading.Thread(target=d.serve_forever, daemon=True).start()
     sys.stderr.write("bicameral up: control=0.0.0.0:%d agent=0.0.0.0:%d "
-                     "strata=%s strata_state=%s model_id=%s\n"
+                     "strata=%s strata_state=%s model_id=%s tls=%s\n"
                      % (args.control_port, args.agent_port, STRATA_URL,
-                        STATE["strata"], STATE["model_id"]))
+                        STATE["strata"], STATE["model_id"], tls))
     try:
         while True:
             time.sleep(60)
@@ -1242,4 +1390,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
