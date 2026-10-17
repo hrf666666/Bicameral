@@ -76,6 +76,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -550,6 +551,122 @@ def save_anchor(path, text):
         return "cannot write anchor %s: %s" % (path, e.strerror or e)
 
 
+def load_anchor(path):
+    """Read the anchor file, fail-closed. Returns (anchor dict | None, err).
+
+    None + no error means "no anchor yet" (first ever chain — the only
+    case where the daemon may start a chain from seq 1). An anchor that
+    EXISTS but cannot be read/parsed is an error, never a silent fresh
+    start: the whole point of the anchor is that it is the external
+    record of where the audit provably ended."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return None, None
+    except OSError as e:
+        return None, "cannot read anchor %s: %s" % (path, e.strerror or e)
+    try:
+        obj = json.loads(text)
+    except ValueError as e:
+        return None, "anchor %s is not valid JSON: %s" % (
+            path, type(e).__name__)
+    if not isinstance(obj, dict) or obj.get("schema") != ANCHOR_SCHEMA:
+        return None, "anchor %s schema must be %r" % (path, ANCHOR_SCHEMA)
+    seq, tail = obj.get("seq"), obj.get("tail_sha256_16")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0 \
+            or not isinstance(tail, str) or not SHA16_RE.match(tail):
+        return None, ("anchor %s malformed: seq must be a non-negative int "
+                      "and tail_sha256_16 16 lowercase hex chars" % path)
+    return obj, None
+
+
+def anchor_contradiction(anchor, cur_seq, cur_prev_sha):
+    """Pure: does the freshly appended audit tail contradict the anchor?
+
+    anchor None (no anchor yet) -> None: any chain start is legitimate.
+    Legitimate advance: the new row's seq is EXACTLY anchor.seq + 1 and
+    its prev_sha256_16 continues the anchored tail. Anything else is a
+    regression reason string:
+      - cur_seq <= anchor.seq   -> the audit was deleted/truncated after
+        anchoring (anchor.seq above the chain tail — the silent-heal case:
+        append_audit_event would otherwise restart a fresh chain at seq 1);
+      - cur_seq >  anchor.seq+1 -> the chain jumped (foreign writer);
+      - prev hash mismatch      -> rows were rewritten under the same seq.
+    """
+    if anchor is None:
+        return None
+    a_seq, a_tail = anchor["seq"], anchor["tail_sha256_16"]
+    if cur_seq != a_seq + 1:
+        return ("audit seq %d does not continue anchored seq %d — the "
+                "audit was deleted or truncated after anchoring"
+                % (cur_seq, a_seq))
+    if cur_prev_sha != a_tail:
+        return ("audit row %d prev_sha256_16=%s does not continue the "
+                "anchored tail %s — rows rewritten since anchoring"
+                % (cur_seq, cur_prev_sha, a_tail))
+    return None
+
+
+def anchor_advance(anchor, audit_path, anchor_path, tail, seq, ts=None):
+    """One round's anchor update, fail-closed. Reads back the exact tail
+    bytes the append produced, cross-checks them against the EXTERNAL
+    anchor (anchor_contradiction), and only then atomically overwrites the
+    anchor file. Returns (new_anchor, None) on a legitimate advance or
+    (None, err) with err prefixed "regression: " (anchor deliberately NOT
+    overwritten — the off-host copy still proves the tampering) or
+    "io: " (read-back/anchor-write failure)."""
+    try:
+        with open(audit_path, "r", encoding="utf-8", errors="replace") as f:
+            raw, disk_seq = audit_tail_raw(f.read())
+    except OSError as e:
+        return None, "io: appended row not verifiable — cannot read audit: %s" \
+            % (e.strerror or e)
+    if raw is None or disk_seq != seq or audit_line_sha(raw) != tail:
+        return None, ("io: audit tail on disk (seq=%s) does not match the "
+                      "row just appended (seq=%d tail=%s)"
+                      % (disk_seq, seq, tail))
+    try:
+        rec = json.loads(raw)
+        prev = rec.get("prev_sha256_16") if isinstance(rec, dict) else None
+    except ValueError:
+        prev = None
+    regression = anchor_contradiction(anchor, seq, prev)
+    if regression:
+        return None, "regression: %s" % regression
+    text = anchor_text(tail, seq, audit_path, time.time() if ts is None else ts)
+    aerr = save_anchor(anchor_path, text)
+    if aerr:
+        return None, "io: %s" % aerr
+    return {"schema": ANCHOR_SCHEMA, "audit_path": audit_path,
+            "tail_sha256_16": tail, "seq": seq}, None
+
+
+def merge_registries(mem, disk):
+    """Pure: fold a freshly loaded on-disk registry into the daemon's
+    in-memory copy so a resident daemon never rolls back external updates
+    (e.g. an operator's one-shot `fleet.py check` while the daemon loops).
+    Per device: the entry with the newer last_seen_ts wins wholesale —
+    that IS "last_seen_ts 取 max, 报告取新" (path+sha always travel with
+    the ts that produced them; splitting the pair would pair a timestamp
+    with evidence it never produced). Devices known to either side
+    survive; updated_ts takes the max (None treated as -inf)."""
+    out = {}
+    for name in set(mem["devices"]) | set(disk["devices"]):
+        a, b = mem["devices"].get(name), disk["devices"].get(name)
+        if a is None:
+            out[name] = b
+        elif b is None:
+            out[name] = a
+        else:
+            out[name] = a if a["last_seen_ts"] >= b["last_seen_ts"] else b
+    return {"schema": REGISTRY_SCHEMA,
+            "updated_ts": max(mem.get("updated_ts") or 0.0,
+                              disk.get("updated_ts") or 0.0),
+            "manifest_sha256_16": disk.get("manifest_sha256_16"),
+            "devices": out}
+
+
 # --------------------------------------------------------------------------- #
 # the one door to the outside world — runner injection
 # --------------------------------------------------------------------------- #
@@ -735,7 +852,16 @@ def cmd_daemon(args):
     its tail sha256_16 anchored into a separate file (A2 residual closed:
     last-row deletion becomes externally visible). SIGTERM/SIGINT finish
     the current round — evidence and anchor are always consistent — and
-    exit 0."""
+    exit 0.
+
+    Fail-closed anchoring: an anchor that exists at startup pins seq/tail;
+    every round's append is verified against it (anchor_advance) BEFORE
+    the anchor is overwritten. An audit that regressed against the anchor
+    (deleted/truncated — the silent chain-restart append_audit_event
+    cannot see on its own) is printed as *** AUDIT REGRESSED ***, the
+    anchor is deliberately NOT overwritten (the off-host copy still
+    proves the tampering) and the daemon exits 3 so the systemd OnFailure
+    marker fires."""
     if not (isinstance(args.interval, (int, float)) and args.interval > 0):
         print("fleet: --interval must be a positive number of seconds, "
               "got %r" % (args.interval,), file=sys.stderr)
@@ -751,6 +877,17 @@ def cmd_daemon(args):
     reports_dir = os.path.join(reg_dir, "reports")
     audit_path = os.path.join(reg_dir, FLEET_AUDIT_NAME)
     anchor_path = args.anchor or os.path.join(reg_dir, FLEET_ANCHOR_NAME)
+    anchor, anchor_err = load_anchor(anchor_path)
+    if anchor_err:
+        print("fleet: %s — refusing to run: the anchor is the external "
+              "record of where the audit provably ended; repair it or "
+              "point --anchor at the off-host copy" % anchor_err,
+              file=sys.stderr)
+        return 2
+    if anchor is not None:
+        print("fleet: anchor loaded: seq=%d tail_sha256_16=%s (%s)"
+              % (anchor["seq"], anchor["tail_sha256_16"], anchor_path),
+              file=sys.stderr)
     # Previous states start as what `status` would print right now (the
     # probe-less registry classify) — a daemon restart therefore does not
     # invent spurious transitions; devices absent from the registry start
@@ -776,6 +913,15 @@ def cmd_daemon(args):
                   % (rounds, err), file=sys.stderr)
             stop.wait(args.interval)
             continue
+        # Re-load the registry each round and merge it with the in-memory
+        # copy: this loop must not roll back an external writer's fresher
+        # entries (a one-shot `fleet.py check` run while the daemon is
+        # resident) with this process's stale snapshot.
+        disk_reg, disk_problems = load_registry(args.registry)
+        for p in disk_problems:
+            print("fleet: round %d: registry: %s" % (rounds, p),
+                  file=sys.stderr)
+        registry = merge_registries(registry, disk_reg)
         now = time.time()
         rows = probe_round_rows(devices_r, registry, args.probe, reports_dir,
                                 default_runner, args.timeout_s,
@@ -797,21 +943,32 @@ def cmd_daemon(args):
               % (rounds, len(rows), counts[ONLINE], counts[STALE],
                  counts[OFFLINE], args.interval), file=sys.stderr)
         # A2 residual, automated: chain the round onto the fleet audit and
-        # anchor the new tail into a separate, externally comparable file.
+        # anchor the new tail into a separate, externally comparable file —
+        # but only after the append is verified to CONTINUE the anchored
+        # chain (never silently heal a regressed audit, never overwrite the
+        # anchor with a lie).
         ev = round_event(rounds, states, manifest_r, time.time())
         tail, seq, aerr = append_audit_event(audit_path, ev)
         if aerr:
             print("fleet: *** AUDIT APPEND FAILED — %s (round %d NOT "
                   "anchored) ***" % (aerr, rounds), file=sys.stderr)
         else:
-            anchor_ts = time.time()
-            aerr = save_anchor(anchor_path,
-                               anchor_text(tail, seq, audit_path, anchor_ts))
-            if aerr:
+            new_anchor, verr = anchor_advance(anchor, audit_path,
+                                              anchor_path, tail, seq)
+            if verr and verr.startswith("regression: "):
+                print("fleet: *** AUDIT REGRESSED — %s ***"
+                      % verr[len("regression: "):], file=sys.stderr)
+                print("fleet: *** refusing to overwrite anchor %s — the "
+                      "off-host copy still proves where the audit ended; "
+                      "investigate, then restore or re-anchor. Exiting 3 "
+                      "(OnFailure)." % anchor_path, file=sys.stderr)
+                return 3
+            if verr:                    # io: read-back or anchor write failed
                 print("fleet: *** ANCHOR WRITE FAILED — %s (tail "
                       "sha256_16=%s seq=%d NOT anchored) ***"
-                      % (aerr, tail, seq), file=sys.stderr)
+                      % (verr, tail, seq), file=sys.stderr)
             else:
+                anchor = new_anchor
                 print("fleet: anchored audit tail sha256_16=%s seq=%d -> %s"
                       % (tail, seq, anchor_path), file=sys.stderr)
         prev_states = states
@@ -822,7 +979,8 @@ def cmd_daemon(args):
 
 
 # --------------------------------------------------------------------------- #
-# selftest — pure functions + stub runner (no network, no ssh, no files)
+# selftest — pure functions + stub runner (no network, no ssh; the only
+# files touched are self-cleaning tempdirs for the anchor-guard contract)
 # --------------------------------------------------------------------------- #
 
 def cmd_selftest(_args) -> int:
@@ -1083,6 +1241,117 @@ def cmd_selftest(_args) -> int:
           and FLEET_ANCHOR_NAME != FLEET_AUDIT_NAME
           and FLEET_ANCHOR_NAME.endswith(".anchor")
           and SHA16_RE.match(json.loads(anchor)["tail_sha256_16"]) is not None)
+
+    # --- daemon anchor guard: a regressed audit must NEVER silently heal
+    #     (fresh chain from seq 1) nor overwrite the external anchor --- #
+    check("daemon.anchor_contradiction.no_anchor_anything_legit",
+          anchor_contradiction(None, 1, None) is None
+          and anchor_contradiction(None, 99, "a" * 16) is None)
+    anchored = {"schema": ANCHOR_SCHEMA, "seq": 5,
+                "tail_sha256_16": "9a4c1f2e3d5b6a70"}
+    check("daemon.anchor_contradiction.legit_advance",
+          anchor_contradiction(anchored, 6, "9a4c1f2e3d5b6a70") is None)
+    check("daemon.anchor_contradiction.audit_deleted_or_truncated",
+          bool(anchor_contradiction(anchored, 1, None))          # whole audit gone
+          and bool(anchor_contradiction(anchored, 5, "x" * 16))  # tail cut
+          and "deleted or truncated" in anchor_contradiction(anchored, 1, None))
+    check("daemon.anchor_contradiction.chain_rewritten",
+          bool(anchor_contradiction(anchored, 6, "f" * 16))
+          and "rewritten" in anchor_contradiction(anchored, 6, "f" * 16))
+    check("daemon.anchor_contradiction.seq_jump",
+          bool(anchor_contradiction(anchored, 8, "9a4c1f2e3d5b6a70")))
+
+    with tempfile.TemporaryDirectory(prefix="fleet-selftest-") as td:
+        aud = os.path.join(td, "audit.jsonl")
+        anc = os.path.join(td, "audit.anchor")
+
+        def anchored_bytes():
+            with open(anc, "rb") as f:
+                return f.read()
+
+        # rounds 1..3 chain cleanly, each anchor advance is legitimate
+        da = None
+        for s in (1, 2, 3):
+            t, q, e = append_audit_event(aud, {"event": ROUND_EVENT, "n": s})
+            da, verr = anchor_advance(da, aud, anc, t, q, ts=1760000000.0 + s)
+            if not (e is None and verr is None and da
+                    and da["seq"] == s and da["tail_sha256_16"] == t):
+                check("daemon.anchor_guard.clean_chain_round_%d" % s,
+                      False, "e=%r verr=%r da=%r" % (e, verr, da))
+                break
+        else:
+            check("daemon.anchor_guard.clean_chain_advances",
+                  da is not None and da["seq"] == 3
+                  and json.loads(anchored_bytes())["seq"] == 3)
+        pinned = anchored_bytes()          # the externally copied anchor
+        # THE regression: delete the audit, let the next append silently
+        # restart a fresh chain — the guard must refuse to overwrite the
+        # anchor and say so in the error string.
+        os.unlink(aud)
+        t, q, e = append_audit_event(aud, {"event": ROUND_EVENT, "n": 4})
+        check("daemon.anchor_guard.silent_heal_would_restart_seq_1",
+              e is None and q == 1, "seq=%r err=%r" % (q, e))
+        da2, verr = anchor_advance(da, aud, anc, t, q, ts=1760000001.0)
+        check("daemon.anchor_guard.deleted_audit_refuses_anchor_overwrite",
+              da2 is None and verr is not None
+              and verr.startswith("regression: ")
+              and "deleted or truncated" in verr
+              and anchored_bytes() == pinned, verr or "anchor overwritten")
+        # a rewritten chain (same length, different bytes) also refuses
+        da3, verr3 = anchor_advance(
+            da, aud, anc, audit_line_sha('{"forged":true}'), 4,
+            ts=1760000002.0)   # tail cannot be read back -> io, anchor kept
+        check("daemon.anchor_guard.readback_mismatch_refuses",
+              da3 is None and verr3 is not None and verr3.startswith("io: ")
+              and anchored_bytes() == pinned, verr3 or "anchor overwritten")
+        # load_anchor: fresh None / malformed fail-closed / good round-trip
+        la, lerr = load_anchor(os.path.join(td, "absent.anchor"))
+        check("daemon.load_anchor.absent_is_none_no_err",
+              la is None and lerr is None, str(lerr))
+        with open(anc, "w") as f:
+            f.write('{"schema": "fleet-anchor/1", "seq": "seven"}')
+        la, lerr = load_anchor(anc)
+        check("daemon.load_anchor.malformed_fails_closed",
+              la is None and bool(lerr), str(lerr))
+        with open(anc, "w") as f:
+            f.write("not json at all")
+        la, lerr = load_anchor(anc)
+        check("daemon.load_anchor.corrupt_fails_closed",
+              la is None and bool(lerr), str(lerr))
+
+    # --- merge_registries: the resident daemon must not roll back an
+    #     external writer's fresher registry entries --- #
+    entry = lambda ts, sha: {"last_seen_ts": ts, "last_report_path": "/r/%s.json" % sha,
+                             "report_sha256_16": sha}
+    mem = {"schema": REGISTRY_SCHEMA, "updated_ts": 100.0,
+           "manifest_sha256_16": "a" * 16,
+           "devices": {"jetson": entry(90.0, "a" * 16),
+                       "bi150": entry(50.0, "b" * 16),
+                       "local": entry(70.0, "c" * 16)}}
+    disk = {"schema": REGISTRY_SCHEMA, "updated_ts": 120.0,
+            "manifest_sha256_16": "b" * 16,
+            "devices": {"jetson": entry(95.0, "d" * 16),      # external newer
+                        "bi150": entry(40.0, "e" * 16),       # external older
+                        "newdev": entry(119.0, "f" * 16)}}    # external only
+    m = merge_registries(mem, disk)
+    check("daemon.merge.external_newer_entry_wins",
+          m["devices"]["jetson"] == entry(95.0, "d" * 16),
+          str(m["devices"]["jetson"]))
+    check("daemon.merge.memory_newer_entry_kept",
+          m["devices"]["bi150"] == entry(50.0, "b" * 16),
+          str(m["devices"]["bi150"]))
+    check("daemon.merge.external_only_device_survives",
+          m["devices"]["newdev"] == entry(119.0, "f" * 16))
+    check("daemon.merge.memory_only_device_survives",
+          m["devices"]["local"] == entry(70.0, "c" * 16))
+    check("daemon.merge.updated_ts_max_and_schema",
+          m["updated_ts"] == 120.0 and m["schema"] == REGISTRY_SCHEMA
+          and set(m["devices"]) == {"jetson", "bi150", "local", "newdev"})
+    check("daemon.merge.empty_disk_side_is_noop_devices",
+          merge_registries(mem, {"schema": REGISTRY_SCHEMA,
+                                 "updated_ts": None,
+                                 "manifest_sha256_16": None,
+                                 "devices": {}})["devices"] == mem["devices"])
 
     print("selftest: %d failure(s)" % len(failures))
     return 1 if failures else 0

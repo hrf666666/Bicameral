@@ -1175,11 +1175,13 @@ def decide_vgpu_capable(listings: list[dict]) -> bool | None:
     """Combine vgpu -s/-c/-q parsed listings into the observed verdict (pure;
     selftest-covered).
       True   — at least one listing shows actual vGPU type rows
-      False  — listings answered but every one is an interpretable denial
-               (unsupported-mode marker, per-card no-types marker, or an
-               "Active vGPUs: 0" total)
-      None   — nothing interpretable answered (tool absent, empty, or only
-               unstructured output) — recorded as unknown, never guessed."""
+      False  — at least one listing carries an interpretable denial from
+               -s/-c (unsupported-mode marker or per-card no-types marker)
+      None   — nothing interpretable answered (tool absent, empty, only
+               unstructured output) or only neutral evidence — e.g. an -q
+               listing whose only signal is an "Active vGPUs: 0" count:
+               idle != incapable, so the count alone is never a denial and
+               never overrides the -s/-c markers. Never guessed."""
     answered = [l for l in listings if l and any(
         (l.get("cards"), l.get("unsupported_mode"), l.get("no_types_markers"),
          l.get("type_rows"), l.get("other_lines"),
@@ -1190,10 +1192,10 @@ def decide_vgpu_capable(listings: list[dict]) -> bool | None:
         return True
 
     def interpretable_denial(l: dict) -> bool:
-        return bool(l.get("unsupported_mode") or l.get("no_types_markers")
-                    or l.get("active_vgpus_total") == 0)
+        # active_vgpus_total == 0 deliberately absent: idle != incapable
+        return bool(l.get("unsupported_mode") or l.get("no_types_markers"))
 
-    if all(interpretable_denial(l) for l in answered):
+    if any(interpretable_denial(l) for l in answered):
         return False
     return None
 
@@ -1481,8 +1483,8 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
           decide_vgpu_capable([parse_vgpu_listing(BI150_VGPU_S_SAMPLE)]) is False)
     check("decide.unsupported_mode_false",
           decide_vgpu_capable([parse_vgpu_listing(BI100_VGPU_S_SAMPLE)]) is False)
-    check("decide.active_zero_false",
-          decide_vgpu_capable([parse_vgpu_listing(VGPU_ACTIVE_Q_SAMPLE)]) is False)
+    check("decide.active_zero_alone_unknown",
+          decide_vgpu_capable([parse_vgpu_listing(VGPU_ACTIVE_Q_SAMPLE)]) is None)
     check("decide.bi150_trio_false",
           decide_vgpu_capable([parse_vgpu_listing(BI150_VGPU_S_SAMPLE),
                                parse_vgpu_listing(BI150_VGPU_S_SAMPLE),

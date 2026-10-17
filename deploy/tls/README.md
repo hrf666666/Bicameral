@@ -1,19 +1,22 @@
 # deploy/tls — TLS 数据面测试证书与门禁记录
 
 `bicameral/server.py` 的可选 TLS 数据面（`--tls-cert` / `--tls-key` /
-`--tls-client-ca`）所用的**固定测试证书**与本地门禁实测记录。
+`--tls-client-ca`）的**本地门禁实测记录**与测试物料生成命令。
 
-> **仅限测试**：本目录私钥无口令、有效期 10 年、CA 私钥就在旁边 ——
-> 生产部署必须换用运维下发的证书，切勿把本目录原样带上生产机。
-> `.gitignore` 未排除本目录：这些是公开性质的测试物料，私钥泄露无保护价值。
+> **物料不入库**：本目录只留生成命令与公开性质的测试证书（`*.crt`）；
+> **全部私钥（`*.key`）一律不入 git**（`deploy/tls/.gitignore` 已排除
+> `*.key`，历史版本中的三把私钥已 `git rm --cached` 移出索引）。
+> 上面的证书随时可用下方 openssl 命令在运行时重新生成——需要私钥时
+> 现场生成即可，不要从任何仓库/聊天记录找回。
+> 生产部署必须换用运维下发的证书与私钥，切勿把本目录测试物料带上生产机。
 
 ## 文件清单
 
-| 文件 | 说明 |
-| --- | --- |
-| `ca.crt` / `ca.key` | 测试 CA（CN=bicameral-test-ca），签发下面两张证书 |
-| `server.crt` / `server.key` | 服务端证书（CN=localhost，SAN: localhost,127.0.0.1） |
-| `client.crt` / `client.key` | mTLS 客户端证书（CN=bicameral-test-client） |
+| 文件 | 入库？ | 说明 |
+| --- | --- | --- |
+| `ca.crt` / `client.crt` / `server.crt` | 是 | 测试证书（CA CN=bicameral-test-ca；服务端 CN=localhost，SAN: localhost,127.0.0.1；客户端 CN=bicameral-test-client） |
+| `ca.key` / `server.key` / `client.key` | **否**（`.gitignore`） | 对应私钥——用下方命令本地生成，`chmod 600` 保管 |
+| `.gitignore` | 是 | 排除 `*.key`，防止私钥再次入库 |
 
 重新生成（OpenSSL 3.x，命令即本目录证书的实际来源）：
 
@@ -35,38 +38,46 @@ openssl verify -CAfile ca.crt server.crt client.crt     # -> server.crt: OK / cl
 
 ## server.py 用法
 
+路径以运维下发物料为准（示例用 `/etc/bicameral/tls/`）；本地门禁可先按
+上方命令在 `deploy/tls/` 现场生成测试证书再替换路径。
+
 ```bash
 # TLS（两个平面都走 TLS；/healthz 免 token 但同一 TLS；默认不带这些参数 = 纯 HTTP 不变）
 BICAMERAL_ADMIN_TOKEN=<>=16字符> python3 bicameral/server.py \
-  --tls-cert deploy/tls/server.crt --tls-key deploy/tls/server.key
+  --tls-cert /etc/bicameral/tls/server.crt --tls-key /etc/bicameral/tls/server.key
 
 # mTLS（额外要求并校验客户端证书）
-... --tls-cert deploy/tls/server.crt --tls-key deploy/tls/server.key \
-    --tls-client-ca deploy/tls/ca.crt
+... --tls-cert /etc/bicameral/tls/server.crt --tls-key /etc/bicameral/tls/server.key \
+    --tls-client-ca /etc/bicameral/tls/ca.crt
 
 # 参数红线：只给 --tls-cert 不给 --tls-key（或反之）→ 启动即报错退出，绝不静默回退 HTTP
-python3 bicameral/server.py --tls-cert deploy/tls/server.crt
+python3 bicameral/server.py --tls-cert /etc/bicameral/tls/server.crt
 # tls: --tls-cert and --tls-key must be given together (missing --tls-key)   (exit 1)
 ```
 
 `--selftest` 覆盖参数组合的纯函数用例（`tls.off_by_default` …
-`tls.ca_with_half_pair_rejected`，共 7 项）。
+`tls.ca_with_half_pair_rejected`，共 7 项）；`--tls-integration` 是带 I/O 的
+集成自测：运行时生成一次性自签证书（openssl 子进程）、在环回临时端口起
+TLS 实例、逐项断言 无 token /issue→401、带 token→200、/healthz 免 token→200。
 
 ## deploy.sh 用法
 
 ```bash
-# TLS
-HOST=... ADMIN_TOKEN=... TLS_CERT=deploy/tls/server.crt TLS_KEY=deploy/tls/server.key \
-  ./scripts/deploy.sh
+# TLS（物料由运维下发；私钥经 stdin+umask 077 传输，远端必为 0600）
+HOST=... ADMIN_TOKEN=... TLS_CERT=/etc/bicameral/tls/server.crt \
+  TLS_KEY=/etc/bicameral/tls/server.key ./scripts/deploy.sh
 # mTLS（再追加客户端 CA；可选 TLS_CLIENT_CERT/TLS_CLIENT_KEY 供部署后健康检查用）
-HOST=... ADMIN_TOKEN=... TLS_CERT=... TLS_KEY=... TLS_CLIENT_CA=deploy/tls/ca.crt \
-  TLS_CLIENT_CERT=deploy/tls/client.crt TLS_CLIENT_KEY=deploy/tls/client.key \
+HOST=... ADMIN_TOKEN=... TLS_CERT=... TLS_KEY=... TLS_CLIENT_CA=/etc/bicameral/tls/ca.crt \
+  TLS_CLIENT_CERT=/etc/bicameral/tls/client.crt TLS_CLIENT_KEY=/etc/bicameral/tls/client.key \
   ./scripts/deploy.sh
 # 不设 TLS_CERT/TLS_KEY → 与原来完全一致（纯 HTTP，脚本打印提示）
 ```
 
-脚本行为：证书存在才 scp 上传为远端 `$REMOTE_DIR/tls-*.pem`（0600）并向
-`SERVER_ARGS` 追加 `--tls-cert/--tls-key/--tls-client-ca`；部署后健康检查随之切换
+脚本行为：公开证书走 scp；**私钥与客户端 CA 走 stdin 管道
+（`umask 077; cat >`，与 admin token 同纪律——scp 的远端权限继承本地源
+文件位，0644 私钥会原样落地）**，写入远端 `$REMOTE_DIR/tls-*.pem`（0600，
+chmod 失败即部署失败）并向 `SERVER_ARGS` 追加
+`--tls-cert/--tls-key/--tls-client-ca`；部署后健康检查随之切换
 为 `curl -k https://…`（mTLS 再带 `--cert/--key`）。只给一半证书对 → 报错退出。
 
 ## 本地门禁实测（留档，2026-10-18，主机 nvidia-desktop，端口 18410/18411）

@@ -53,8 +53,18 @@ ExecStart=/usr/bin/python3 ${BICAMERAL_HOME}/bicameral/fleet.py daemon \
 Restart=on-failure
 RestartSec=10s
 # The daemon exits gracefully on SIGTERM after finishing the current round
-# (evidence + anchor stay consistent); give it time to close the round.
-TimeoutStopSec=120s
+# (evidence + anchor stay consistent). The stop budget must cover a FULL
+# round in progress at SIGTERM, worst case:
+#     --timeout-s x device count x 2 + margin
+# (per subprocess step, per device; x2 for the ssh mkdir/run plus scp
+# up/down multi-step transports). With defaults (120 s timeout, 1 device)
+# 900 s leaves generous margin. If systemd SIGKILLs the daemon instead,
+# the kill can land BETWEEN the audit append and the anchor write — the
+# anchor then trails the audit by one round (a lagging anchor is detectable
+# and safe; the reverse — an anchor ahead of the audit — is refused by the
+# daemon's regression guard) — but the graceful-exit window must simply
+# never be exhausted in normal operation.
+TimeoutStopSec=900s
 SyslogIdentifier=bicameral-fleet
 StandardOutput=journal
 StandardError=journal

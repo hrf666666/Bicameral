@@ -113,6 +113,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -637,8 +638,11 @@ def anchored_tail(obj):
 def check_anchor(anchor_path, live_tail, when):
     """Loud external-anchor cross-check at startup/append (A2).
 
-    No anchor file -> nothing to compare (True — stated, not invented).
-    Anchor unreadable/malformed -> loud warning, False.
+    No anchor file (FileNotFoundError) -> nothing to compare (True —
+    stated, not invented). Any OTHER OSError (permission denied, I/O
+    error, ...) is NOT "no anchor": it warns loudly ("ANCHOR UNREADABLE")
+    and returns False — an unreadable anchor must never silently count as
+    a match. Anchor malformed -> loud warning, False.
     Anchored tail != live tail -> LOUD stderr warning, False: rows moved
     since anchoring — a legitimate append (then re-anchor) or deletion /
     rewrite (audit 灭迹). Fail-loud, never fail-stopped: recovery is
@@ -649,8 +653,14 @@ def check_anchor(anchor_path, live_tail, when):
     try:
         with open(anchor_path, "r", encoding="utf-8") as f:
             obj = json.load(f)
-    except OSError:
+    except FileNotFoundError:
         return True                       # no anchor yet — nothing to compare
+    except OSError as e:
+        print("router: *** ANCHOR UNREADABLE (%s): %s (%s) — investigate "
+              "before trusting the audit tail"
+              % (when, anchor_path, e.strerror or type(e).__name__),
+              file=sys.stderr)
+        return False
     except Exception as e:
         print("router: *** ANCHOR UNREADABLE (%s): %s (%s) — investigate "
               "before trusting the audit tail"
@@ -689,12 +699,28 @@ def cmd_anchor(args) -> int:
     _, last_seq = _audit_tail(args.audit)
     rec = build_anchor_record(tail, rows, args.audit,
                               seq=last_seq if last_seq else None)
-    d = os.path.dirname(args.out)
-    if d:
+    # Atomic write (tmp + os.replace — the same discipline as fleet.py's
+    # save_anchor): an externally compared file must never be seen
+    # half-written if the process dies mid-write.
+    d = os.path.dirname(os.path.abspath(args.out))
+    tmp = None
+    try:
         os.makedirs(d, exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(rec, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+        tmp = os.path.join(d, ".%s.tmp-%d" % (
+            os.path.basename(args.out), os.getpid()))
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp, args.out)
+    except OSError as e:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        print("router: cannot write anchor %s: %s"
+              % (args.out, e.strerror or e), file=sys.stderr)
+        return 2
     print("router: anchor written: %s rows=%d seq=%s tail=%s (audit=%s)"
           % (args.out, rows, rec["seq"], tail, args.audit), file=sys.stderr)
     return 0
@@ -1174,8 +1200,8 @@ def cmd_selftest(_args) -> int:
     check("chain.trailing_corruption_detected", not ok, why)
 
     # --- A2 external anchoring: anchor/1 record round-trip + mismatch
-    #     primitive (pure; the file cross-check itself is check_anchor I/O,
-    #     excluded from this selftest like health_probe) --- #
+    #     primitive (pure) + the check_anchor file cross-check (tempdir
+    #     only: missing file True, unreadable file loud False) --- #
     tail_r3 = audit_line_sha(r3)
     rec = build_anchor_record(tail_r3, 4, "route-audit.jsonl", seq=3, ts=1.0)
     check("anchor.record_shape",
@@ -1203,6 +1229,23 @@ def cmd_selftest(_args) -> int:
     check("anchor.matches_intact_tail",
           anchored_tail(build_anchor_record(tail2 := tail_trunc, 2, "a"))[0]
           == tail2)
+    # check_anchor file behaviour: missing anchor is legitimately True,
+    # but an anchor that exists and CANNOT be read (chmod 000) is loud
+    # False — it must never silently count as a match. Skipped under
+    # root (root reads through 000); the branch itself stays pinned.
+    if os.geteuid() != 0:
+        with tempfile.TemporaryDirectory(prefix="router-selftest-") as td:
+            absent = os.path.join(td, "absent.anchor")
+            unreadable = os.path.join(td, "unreadable.anchor")
+            with open(unreadable, "w") as f:
+                f.write('{"schema": "anchor/1", "tail_sha256_16": "%s"}'
+                        % ("a" * 16))
+            os.chmod(unreadable, 0)
+            check("anchor.check_missing_file_true",
+                  check_anchor(absent, tail_r3, "selftest") is True)
+            ca = check_anchor(unreadable, tail_r3, "selftest")
+            check("anchor.check_unreadable_file_loud_false", ca is False)
+            os.chmod(unreadable, 0o644)   # let the tempdir be cleaned up
 
     # --- A11: devices/1 structured whitelist — the manifest states facts,
     #     the router owns the argv; run/unknown fields fail closed --- #

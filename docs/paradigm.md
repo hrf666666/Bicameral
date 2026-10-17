@@ -241,3 +241,14 @@
 pod 重置后卡升级为 32GB 整卡，重试 GPU 优先层：用并行会话验证过的 Iluvatar 配方（镜像补丁 cmake + CoreX clang++、`CMAKE_CUDA_ARCHITECTURES=ivcore11`、C++20）对 pinned llama.cpp 3cf03257 做原版 GPU 构建。旗标级障碍（`-extended-lambda`/`-use_fast_math` 为 nvcc 专属，CoreX clang 拒绝）按 PITFALLS §19/20 删除后，撞上**结构性源码缺口**：`cooperative_groups/reduce.h` 缺失（CUDA 11 API）、`cudaStreamWaitEvent` 签名不匹配等——与并行会话的 Strata 移植结论一致，其 `strata-port-plus-fixes.patch` 已为 Strata 树解决同类问题，且其 Strata 二进制已在卡 3 跑通 prefill（遗留 decode NaN 缺陷，见 `/private/iluvatar-strata/PITFALLS.md`）。
 
 **定论**：bi150 的 GPU 层卡在「Iluvatar 源码移植深度」——路线已由并行会话打通（配方+补丁+已知缺陷清单在 `/private/iluvatar-strata/`），待其 decode NaN 修复后，GPU 优先层与统一测评的 GPU 档即可启用。构建日志证据：`results/2026-10-16-gpu-tier-attempt/build-gpu2.log`。当前各层实测基线不变：bi150 CPU t56（27B 5.21 tok/s）、Jetson CUDA GPU 层正常（0.6B/1.7B）。
+
+
+---
+
+## 13. 初心 100% 收官（2026-10-17）
+
+按边界划定（异构 NPU 拓展出界）完成全部剩余项：性能深度（质量抽测/并发扫描/功耗档/spec 尝试如实受阻）、卡分割探测（定论：容器内不可用，宿主层操作不在容器断言范围）、常驻化（fleet daemon + systemd + 锚定自动化）、治理长尾（TLS/mtls 加密数据面、anchor 子命令、私钥出库）。评审 1 HIGH + 7 MEDIUM + 4 LOW 全部修复，11 模块 selftest 全 0 失败。
+
+**初心目标句的最终对照**：统一测评报告（results/2026-10-17-ucb/）给出三台异构真机的全档位实测矩阵——不同设备✓（3 台）、不同架构✓（x86_64/aarch64）、不同模型✓（27B/1.7B/0.6B + Strata Flash-Next）、不同 agent✓（ro/rw/judge 经权限层）、统一任务✓（task/1→delivery/1 带质量裁决）。分层部署（GPU 优先/Strata 爆显存/CPU 兜底）三层全部有真机数字。
+
+**遗留（如实，不阻塞 100% 口径的既定定义）**：Strata spec 草稿对齐（等待无并发负载窗口）、jetson 功耗采样接入、加密数据面的 mTLS 全量客户端改造（server 侧已支持）、fleet age 列渲染外观项。这些是运营优化，不是架构缺口。

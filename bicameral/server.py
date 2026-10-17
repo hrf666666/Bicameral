@@ -61,9 +61,11 @@ import os
 import re
 import secrets
 import ssl
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1213,13 +1215,18 @@ class Server(ThreadingHTTPServer):
             return sock, addr
         sock.settimeout(TLS_HANDSHAKE_TIMEOUT)
         try:
-            return self.tls_context.wrap_socket(sock, server_side=True), addr
+            conn = self.tls_context.wrap_socket(sock, server_side=True)
         except (ssl.SSLError, OSError):
             try:
                 sock.close()
             except OSError:
                 pass
             raise
+        # The timeout above bounds only the HANDSHAKE; once wrapped, clear
+        # it so a long-lived keep-alive connection is not killed by it
+        # (Handler.timeout is the slow-connection guard for the session).
+        conn.settimeout(None)
+        return conn, addr
 
 
 class ControlServer(Server):
@@ -1270,6 +1277,121 @@ def cmd_selftest(_args) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# TLS integration self-test (--tls-integration): the pure selftest above
+# stays I/O-free; this mode live-fires the TLS data plane once. It mints a
+# throwaway self-signed certificate (openssl subprocess — the stdlib cannot
+# generate certificates), serves the control plane over it on an ephemeral
+# loopback port, and asserts the auth matrix end-to-end:
+#   no token   POST /issue   -> 401
+#   token      POST /issue   -> 200 (a real capability token is issued)
+#   no token   GET  /healthz -> 200 (health stays token-free, same TLS)
+# --------------------------------------------------------------------------- #
+
+def _mint_selfsigned_cert(cert_pem, key_pem):
+    """openssl -> throwaway self-signed cert/key in the given paths.
+    Returns None on success or the combined stdout/stderr on failure.
+    -addext needs openssl >= 1.1.1; retry without it (SAN is irrelevant —
+    the client context does not verify the hostname)."""
+    for extra in (["-addext", "subjectAltName=IP:127.0.0.1"], []):
+        proc = subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048",
+             "-keyout", key_pem, "-out", cert_pem, "-days", "2",
+             "-nodes", "-subj", "/CN=127.0.0.1"] + extra,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode == 0:
+            return None
+    return (proc.stdout + proc.stderr).decode("utf-8", "replace").strip()
+
+
+def cmd_tls_integration(_args) -> int:
+    results = []
+
+    def check(name, cond, detail=""):
+        results.append(bool(cond))
+        print(("%s %s %s" % ("PASS" if cond else "FAIL", name, detail)).rstrip())
+
+    global KEY, ADMIN_TOKEN
+    KEY = bytes.fromhex(DEV_MASTER_KEY_HEX)
+    ADMIN_TOKEN = "tls-integration-token-0123456789"   # >= 16 chars, throwaway
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="bicameral-tls-itest-") as td:
+        cert_pem = os.path.join(td, "cert.pem")
+        key_pem = os.path.join(td, "key.pem")
+        err = _mint_selfsigned_cert(cert_pem, key_pem)
+        if err is not None:
+            check("tls_integration.mint_selfsigned_cert", False, err[:200])
+            print("tls-integration: %d/%d passed (no openssl?)"
+                  % (sum(results), len(results)))
+            return 1
+        check("tls_integration.mint_selfsigned_cert", True)
+
+        ctx = build_ssl_context(cert_pem, key_pem, None)   # mode "tls"
+        port = 0                                           # ephemeral loopback
+        try:
+            httpd = ControlServer(("127.0.0.1", port), Handler, tls_context=ctx)
+        except OSError as e:
+            check("tls_integration.server_bind", False, str(e))
+            print("tls-integration: %d/%d passed"
+                  % (sum(results), len(results)))
+            return 1
+        port = httpd.server_address[1]
+        th = threading.Thread(target=httpd.serve_forever, daemon=True)
+        th.start()
+        check("tls_integration.server_up", port > 0, "127.0.0.1:%d" % port)
+
+        client_ctx = ssl._create_unverified_context()  # noqa: SLF001 - self-signed test cert
+        base = "https://127.0.0.1:%d" % port
+
+        def req(method, path, body=None, headers=None):
+            r = urllib.request.Request(base + path, data=body,
+                                       headers=headers or {}, method=method)
+            try:
+                with urllib.request.urlopen(r, timeout=10,
+                                            context=client_ctx) as resp:
+                    return resp.status, resp.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()
+            except Exception as e:                        # noqa: BLE001
+                return None, repr(e).encode("utf-8")
+
+        issue_body = json.dumps({"agent": "agent-ro",
+                                 "task_id": "tls-integration",
+                                 "tools": ["llm.complete"]}).encode("utf-8")
+        # 1: no token -> 401 (CTL/AUTH_REQUIRED), and it came over TLS at all
+        code, raw = req("POST", "/issue", body=issue_body,
+                        headers={"Content-Type": "application/json"})
+        check("tls_integration.issue_without_token_401",
+              code == 401 and b"CTL/AUTH_REQUIRED" in raw,
+              "code=%r body=%s" % (code, raw[:120]))
+        # 2: with the admin token -> 200 + a real capability token
+        code, raw = req("POST", "/issue", body=issue_body,
+                        headers={"Content-Type": "application/json",
+                                 "X-Admin-Token": ADMIN_TOKEN})
+        ok_issue = False
+        try:
+            ok_issue = (code == 200 and json.loads(raw).get("ok") is True
+                        and isinstance(json.loads(raw).get("token"), str))
+        except Exception:                                 # noqa: BLE001
+            pass
+        check("tls_integration.issue_with_token_200",
+              ok_issue, "code=%r body=%s" % (code, raw[:120]))
+        # 3: /healthz stays token-free (over the same TLS)
+        code, raw = req("GET", "/healthz")
+        ok_hz = False
+        try:
+            ok_hz = (code == 200 and json.loads(raw).get("status") == "ok")
+        except Exception:                                 # noqa: BLE001
+            pass
+        check("tls_integration.healthz_token_free_200",
+              ok_hz, "code=%r body=%s" % (code, raw[:120]))
+
+        httpd.shutdown()
+        httpd.server_close()
+    print("tls-integration: %d/%d passed" % (sum(results), len(results)))
+    return 0 if all(results) else 1
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 
@@ -1299,10 +1421,17 @@ def main():
                          "(mTLS); needs --tls-cert/--tls-key")
     ap.add_argument("--selftest", action="store_true",
                     help="run the pure-function self-test and exit")
+    ap.add_argument("--tls-integration", action="store_true",
+                    help="run the TLS integration self-test and exit: mint a "
+                         "throwaway self-signed cert (openssl subprocess), "
+                         "serve the control plane over TLS on an ephemeral "
+                         "loopback port, assert 401/200/token-free matrix")
     args = ap.parse_args()
 
     if args.selftest:
         return cmd_selftest(args)
+    if args.tls_integration:
+        return cmd_tls_integration(args)
 
     DATA_DIR = args.data_dir.rstrip("/")
     DATA_SCOPE = DATA_DIR + "/data"
