@@ -1,0 +1,22 @@
+{
+  "device": "jetson",
+  "jti": "c2a90fa38304d938",
+  "judge_model": "qwen3.8-27b",
+  "attempts": [
+    {
+      "mode": "permission-layer",
+      "latency_ms": 16870.9,
+      "content": "",
+      "error": null
+    },
+    {
+      "mode": "brain-direct",
+      "latency_ms": 11648.9,
+      "content": "{\n\"verdict\": \"pass\",\n\"score\": 9,\n\"rationale\": \"定义准确，符合一句话要求，无冗余。\"\n}",
+      "error": null
+    }
+  ],
+  "final_mode": "brain-direct",
+  "final_content": "{\n\"verdict\": \"pass\",\n\"score\": 9,\n\"rationale\": \"定义准确，符合一句话要求，无冗余。\"\n}",
+  "error": null
+}

@@ -1,0 +1,41 @@
+{
+  "schema": "delivery/1",
+  "task_id": "qa-ability-token-001",
+  "quality_bar": {},
+  "evaluations": [
+    {
+      "device": "bi150",
+      "verdict": "fail",
+      "score": 2.0,
+      "rationale": "答案不完整，句子未结束，缺乏核心定义。",
+      "envelope_ref": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/envelope-bi150.json",
+      "judge_mode": "brain-direct"
+    },
+    {
+      "device": "jetson",
+      "verdict": "fail",
+      "score": 0.0,
+      "rationale": "答案为空，未回答任务要求",
+      "envelope_ref": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/envelope-jetson.json",
+      "judge_mode": "brain-direct"
+    }
+  ],
+  "best_device": null,
+  "audit_refs": {
+    "pipeline_audit": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/pipeline-audit.jsonl",
+    "devices_manifest_sha256_16": "c68599d85994c43b",
+    "route_selected": "bi150",
+    "envelopes": {
+      "bi150": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/envelope-bi150.json",
+      "jetson": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/envelope-jetson.json"
+    },
+    "judge_raw": {
+      "bi150": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/judge-bi150.json",
+      "jetson": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/judge-jetson.json"
+    },
+    "device_audit_refs": {
+      "bi150": "/tmp/bicameral/audit.jsonl",
+      "jetson": "/tmp/bicameral-jetson/audit.jsonl"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "result/1",
+  "task_id": "qa-ability-token-001",
+  "device": "jetson",
+  "engine": {
+    "model_id": "/home/nvidia/code/strata-jetson/work/zoo/gguf/Qwen3-0.6B-Q8_0.gguf",
+    "backend": "CUDA (libggml-cuda.so.0.24.0, libcudart.so.12, libcuda driver API 12.6)"
+  },
+  "perf_ref": "results/2026-10-14-probe-bench/perf-jetson.json",
+  "audit_ref": "/tmp/bicameral-jetson/audit.jsonl",
+  "device_audit_digest": "b04ebc49c73bde73",
+  "result": {
+    "content_summary": "",
+    "usage": {
+      "completion_tokens": 64,
+      "prompt_tokens": 14,
+      "total_tokens": 78,
+      "prompt_tokens_details": {
+        "cached_tokens": 9
+      }
+    }
+  },
+  "latency_ms": 994.3
+}

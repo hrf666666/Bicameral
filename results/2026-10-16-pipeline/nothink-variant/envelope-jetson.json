@@ -1,0 +1,24 @@
+{
+  "schema": "result/1",
+  "task_id": "qa-ability-token-001.nothink",
+  "device": "jetson",
+  "engine": {
+    "model_id": "/home/nvidia/code/strata-jetson/work/zoo/gguf/Qwen3-0.6B-Q8_0.gguf",
+    "backend": "CUDA (libggml-cuda.so.0.24.0, libcudart.so.12, libcuda driver API 12.6)"
+  },
+  "perf_ref": "results/2026-10-14-probe-bench/perf-jetson.json",
+  "audit_ref": "/tmp/bicameral-jetson/audit.jsonl",
+  "device_audit_digest": "4006bd252217741a",
+  "result": {
+    "content_summary": "能力令牌是一种用于验证和授权用户访问特定资源或服务的数字凭证。",
+    "usage": {
+      "completion_tokens": 22,
+      "prompt_tokens": 18,
+      "total_tokens": 40,
+      "prompt_tokens_details": {
+        "cached_tokens": 17
+      }
+    }
+  },
+  "latency_ms": 360.6
+}

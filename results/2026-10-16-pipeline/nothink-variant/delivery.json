@@ -1,0 +1,43 @@
+{
+  "schema": "delivery/1",
+  "task_id": "qa-ability-token-001.nothink",
+  "quality_bar": {
+    "min_accuracy": 0.8
+  },
+  "evaluations": [
+    {
+      "device": "bi150",
+      "verdict": "pass",
+      "score": 9.0,
+      "rationale": "定义准确，切题且完整，符合一句话要求。",
+      "envelope_ref": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/nothink-variant/envelope-bi150.json",
+      "judge_mode": "brain-direct"
+    },
+    {
+      "device": "jetson",
+      "verdict": "pass",
+      "score": 9.0,
+      "rationale": "定义准确，符合一句话要求，无冗余。",
+      "envelope_ref": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/nothink-variant/envelope-jetson.json",
+      "judge_mode": "brain-direct"
+    }
+  ],
+  "best_device": "bi150",
+  "audit_refs": {
+    "pipeline_audit": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/nothink-variant/pipeline-audit.jsonl",
+    "devices_manifest_sha256_16": "c68599d85994c43b",
+    "route_selected": "bi150",
+    "envelopes": {
+      "bi150": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/nothink-variant/envelope-bi150.json",
+      "jetson": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/nothink-variant/envelope-jetson.json"
+    },
+    "judge_raw": {
+      "bi150": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/nothink-variant/judge-bi150.json",
+      "jetson": "/home/nvidia/code/Bicameral/results/2026-10-16-pipeline/nothink-variant/judge-jetson.json"
+    },
+    "device_audit_refs": {
+      "bi150": "/tmp/bicameral/audit.jsonl",
+      "jetson": "/tmp/bicameral-jetson/audit.jsonl"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "device": "bi150",
+  "jti": "604dd62ec3dd3fe4",
+  "judge_model": "qwen3.8-27b",
+  "attempts": [
+    {
+      "mode": "permission-layer",
+      "latency_ms": 17417.8,
+      "content": "",
+      "error": null
+    },
+    {
+      "mode": "brain-direct",
+      "latency_ms": 10196.1,
+      "content": "{\"verdict\":\"fail\",\"score\":2,\"rationale\":\"答案不完整，句子未结束，缺乏核心定义。\"}",
+      "error": null
+    }
+  ],
+  "final_mode": "brain-direct",
+  "final_content": "{\"verdict\":\"fail\",\"score\":2,\"rationale\":\"答案不完整，句子未结束，缺乏核心定义。\"}",
+  "error": null
+}

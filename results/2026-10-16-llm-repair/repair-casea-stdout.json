@@ -1,0 +1,17 @@
+{
+  "report": "REPAIR_REPAIRED",
+  "schema": "repair/1",
+  "app": "repair-casea",
+  "rounds": 1,
+  "final_action": {
+    "type": "adjust_appspec",
+    "field": "service.port",
+    "port": 18012
+  },
+  "install_state": "ready",
+  "port": 18012,
+  "verify": {
+    "ok": true,
+    "rc": 0
+  }
+}

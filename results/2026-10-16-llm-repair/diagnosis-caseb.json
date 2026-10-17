@@ -1,0 +1,109 @@
+{
+  "report": "DIAGNOSIS_REPORT",
+  "schema": "nodeagent/1",
+  "app": "repair-caseb",
+  "rounds": 10,
+  "phenomenon": "HTTPError: HTTP Error 500: Internal Server Error | HTTPError: HTTP Error 500: Internal Server Error | URLError: <urlopen error [Errno 99] Cannot assign requested address> | URLError: <urlopen error [Errno 99] Cannot assign requested address> | all mirrors exhausted (last: URLError: <urlopen error [Errno 99] Cannot assign requested address>)",
+  "error_class": "download_exhausted",
+  "actions_tried": [
+    {
+      "round": 1,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "HTTPError: HTTP Error 500: Internal Server Error | HTTPError: HTTP Error 500: Internal Server Error | URLError: <urlopen error [Errno 99] Cannot assign requested address> | URLError: <urlopen error [Errno 99] Cannot assign requested address> | all mirrors exhausted (last: URLError: <urlopen error [Errno 99] Cannot assign requested address>)",
+        "rc": 3
+      }
+    },
+    {
+      "round": 2,
+      "rule": "backoff_retry",
+      "action": "backoff",
+      "outcome": {
+        "status": "ok",
+        "slept_s": 20.0
+      }
+    },
+    {
+      "round": 3,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "HTTPError: HTTP Error 500: Internal Server Error | HTTPError: HTTP Error 500: Internal Server Error | URLError: <urlopen error [Errno 99] Cannot assign requested address> | URLError: <urlopen error [Errno 99] Cannot assign requested address> | all mirrors exhausted (last: URLError: <urlopen error [Errno 99] Cannot assign requested address>)",
+        "rc": 3
+      }
+    },
+    {
+      "round": 4,
+      "rule": "backoff_retry",
+      "action": "backoff",
+      "outcome": {
+        "status": "ok",
+        "slept_s": 40.0
+      }
+    },
+    {
+      "round": 5,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "HTTPError: HTTP Error 500: Internal Server Error | HTTPError: HTTP Error 500: Internal Server Error | URLError: <urlopen error [Errno 99] Cannot assign requested address> | URLError: <urlopen error [Errno 99] Cannot assign requested address> | all mirrors exhausted (last: URLError: <urlopen error [Errno 99] Cannot assign requested address>)",
+        "rc": 3
+      }
+    },
+    {
+      "round": 6,
+      "rule": "backoff_retry",
+      "action": "backoff",
+      "outcome": {
+        "status": "ok",
+        "slept_s": 80.0
+      }
+    },
+    {
+      "round": 7,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "HTTPError: HTTP Error 500: Internal Server Error | HTTPError: HTTP Error 500: Internal Server Error | URLError: <urlopen error [Errno 99] Cannot assign requested address> | URLError: <urlopen error [Errno 99] Cannot assign requested address> | all mirrors exhausted (last: URLError: <urlopen error [Errno 99] Cannot assign requested address>)",
+        "rc": 3
+      }
+    },
+    {
+      "round": 8,
+      "rule": "backoff_retry",
+      "action": "backoff",
+      "outcome": {
+        "status": "ok",
+        "slept_s": 160.0
+      }
+    },
+    {
+      "round": 9,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "HTTPError: HTTP Error 500: Internal Server Error | HTTPError: HTTP Error 500: Internal Server Error | URLError: <urlopen error [Errno 99] Cannot assign requested address> | URLError: <urlopen error [Errno 99] Cannot assign requested address> | all mirrors exhausted (last: URLError: <urlopen error [Errno 99] Cannot assign requested address>)",
+        "rc": 3
+      }
+    },
+    {
+      "round": 10,
+      "rule": "apply_install",
+      "action": "apply",
+      "outcome": {
+        "status": "fail",
+        "error": "HTTPError: HTTP Error 500: Internal Server Error | HTTPError: HTTP Error 500: Internal Server Error | URLError: <urlopen error [Errno 99] Cannot assign requested address> | URLError: <urlopen error [Errno 99] Cannot assign requested address> | all mirrors exhausted (last: URLError: <urlopen error [Errno 99] Cannot assign requested address>)",
+        "rc": 3
+      }
+    }
+  ],
+  "root_cause_hypothesis": "全部镜像/重试耗尽",
+  "human_actions": "检查镜像可用性后重跑；或主控注入工件改 file://",
+  "escalation_reason": "no_progress: rule apply_install produced the identical failure twice in a row"
+}

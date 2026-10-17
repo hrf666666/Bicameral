@@ -1,0 +1,24 @@
+{
+  "schema": "result/1",
+  "task_id": "qa-ability-token-001.nothink",
+  "device": "bi150",
+  "engine": {
+    "model_id": null,
+    "backend": "CPU only — corex CUDA build of same commit FAILED (structural gaps: cooperative_groups/reduce.h missing, cudaStreamWaitEvent signature mismatch, inline-asm llc crash; CoreX 4.4.0 = CUDA 10.2 era, no real nvcc, Iluvatar clang-18 __CUDA_ARCH__=300) — verdict of 攻坚员 2026-10-14"
+  },
+  "perf_ref": "results/2026-10-14-probe-bench/perf-bi150.json",
+  "audit_ref": "/tmp/bicameral/audit.jsonl",
+  "device_audit_digest": "29e30dd1e66e6b82",
+  "result": {
+    "content_summary": "能力令牌是一种代表特定权限或能力的凭证",
+    "usage": {
+      "completion_tokens": 64,
+      "prompt_tokens": 62,
+      "total_tokens": 126,
+      "prompt_tokens_details": {
+        "cached_tokens": 42
+      }
+    }
+  },
+  "latency_ms": 12557.8
+}

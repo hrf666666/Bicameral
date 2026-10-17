@@ -1,0 +1,22 @@
+{
+  "device": "jetson",
+  "jti": "6fe032c6eeb5fe72",
+  "judge_model": "qwen3.8-27b",
+  "attempts": [
+    {
+      "mode": "permission-layer",
+      "latency_ms": 16704.0,
+      "content": "",
+      "error": null
+    },
+    {
+      "mode": "brain-direct",
+      "latency_ms": 8835.9,
+      "content": "{\"verdict\":\"fail\",\"score\":0,\"rationale\":\"答案为空，未回答任务要求\"}",
+      "error": null
+    }
+  ],
+  "final_mode": "brain-direct",
+  "final_content": "{\"verdict\":\"fail\",\"score\":0,\"rationale\":\"答案为空，未回答任务要求\"}",
+  "error": null
+}

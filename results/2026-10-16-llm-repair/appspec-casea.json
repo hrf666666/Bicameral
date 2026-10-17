@@ -1,0 +1,17 @@
+{
+  "schema": "appspec/1",
+  "name": "repair-casea",
+  "engine": {"name": "llama.cpp", "binary": "/root/bicameral-sandbox/engines/llama.cpp/bin/llama-server"},
+  "model": {
+    "repo": "Qwen/Qwen3-0.6B-GGUF",
+    "file": "Qwen3-0.6B-Q8_0.gguf",
+    "format": "gguf",
+    "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+    "mirror_urls": ["https://hf-mirror.com", "https://huggingface.co"]
+  },
+  "service": {
+    "port": 18011,
+    "health": "/health",
+    "args": ["-m", "{model}", "--host", "127.0.0.1", "--port", "{port}", "-c", "2048", "-t", "32"]
+  }
+}

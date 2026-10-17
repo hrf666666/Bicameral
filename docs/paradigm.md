@@ -221,3 +221,16 @@
 | mirror1 500 + mirror2 不可达 | **1 轮命中**：识别 500/Errno101/egress 三证据 → 重排 mirror_urls → 639MB 下载 → READY（70.1s） | 未测 |
 代价：27B 每轮 52-70s（1.7B 19.4s）。**高价值回流**：Qwen3.8 推理模板 × json_schema 互斥——token 预算全进 reasoning_content、content 恒空，canonical repair.py 4 轮全废；SYSTEM_PROMPT 加 `/no_think` 一行修复（已回流，selftest 0 失败；部署侧等价方案 `--reasoning-format none`）。
 证据：`results/2026-10-16-27b-repair-brain/`（README + raw/ 28 件，双审计 JSONL 全链）。
+
+
+---
+
+## 12. 初心架构实现（2026-10-16，pipeline 闭环）
+
+最初的目标句——「不同设备、不同架构平台、运行不同模型、调用不同 agent，实现统一任务」——以 `bicameral/pipeline.py`（1,002 行，stdlib）全链路落地：
+
+**task/1 → ROUTE（PerfRecord 实测打分）→ 异构双机各执行（各自权限层签发+审计）→ Qwen3.8-27B 按 quality_bar 逐份裁决（judge 令牌走权限层）→ delivery/1 归一交付（evaluations/best_device/audit_refs）**。审计单文件哈希链贯通 PIPELINE_* 全事件。
+
+**真机门（双机 --all-candidates）**：ROUTE selected=bi150（min-ttft）；双机执行 4 枚信封 validate 全 VALID、A9 digest 全 VERIFIED；27B 评审两份裁决原文落档。**最有价值的诚实时刻**：canonical prompt 下两机答案都因推理模板烧掉 64-token 预算而空/截断，27B 评审**如实判双 fail（score 2/0）**——质量门第一次真实否决了交付；/no_think 变体复跑双机 pass 9.0/9.0、best_device=bi150。
+
+**暴露的真问题（回流清单）**：① 在跑的 27B 实例忽略 /no_think（仅 chat_template_kwargs.enable_thinking=false 有效），而权限层 h_llm_complete 带不动该字段且不可重启——llm.complete 需要支持推理模型参数透传（v1.1）；② 推理模型下 llm_max_tokens=64 预算必然耗尽（教训第三次出现，schema 默认值需按模型类型分档）；③ jetson/bi150 端口从对端不可达，跨机验收依赖 ssh 隧道——fleet 层需要一条加密数据面（v2）。

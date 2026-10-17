@@ -1,0 +1,19 @@
+{
+  "report": "REPAIR_REPAIRED",
+  "schema": "repair/1",
+  "app": "repair-caseb",
+  "rounds": 1,
+  "final_action": {
+    "type": "adjust_appspec",
+    "field": "model.mirror_urls",
+    "mirror_urls": [
+      "https://hf-mirror.com"
+    ]
+  },
+  "install_state": "ready",
+  "port": 18013,
+  "verify": {
+    "ok": true,
+    "rc": 0
+  }
+}
