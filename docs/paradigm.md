@@ -234,3 +234,10 @@
 **真机门（双机 --all-candidates）**：ROUTE selected=bi150（min-ttft）；双机执行 4 枚信封 validate 全 VALID、A9 digest 全 VERIFIED；27B 评审两份裁决原文落档。**最有价值的诚实时刻**：canonical prompt 下两机答案都因推理模板烧掉 64-token 预算而空/截断，27B 评审**如实判双 fail（score 2/0）**——质量门第一次真实否决了交付；/no_think 变体复跑双机 pass 9.0/9.0、best_device=bi150。
 
 **已解决（2026-10-16 当日晚）**：① h_llm_complete 支持推理模型——`--no-think`（/no_think 前缀 + chat_template_kwargs.enable_thinking=false 双机制）与 `--llm-max-tokens`（默认 64→512 可调，经 /capabilities 暴露）；bi150 真机复测 canonical 案例：空答案 → 109 字符完整回答（61 tokens）；② 同一开关关闭预算耗尽问题；deploy.sh 的 SERVER_ARGS 经 0600 环境文件转写（ssh argv 会压平引号——实测踩坑）；③ jetson/bi150 端口从对端不可达，跨机验收依赖 ssh 隧道——fleet 层需要一条加密数据面（v2）。
+
+
+### 9.3 GPU 层攻坚记录（2026-10-16 晚，bi150）
+
+pod 重置后卡升级为 32GB 整卡，重试 GPU 优先层：用并行会话验证过的 Iluvatar 配方（镜像补丁 cmake + CoreX clang++、`CMAKE_CUDA_ARCHITECTURES=ivcore11`、C++20）对 pinned llama.cpp 3cf03257 做原版 GPU 构建。旗标级障碍（`-extended-lambda`/`-use_fast_math` 为 nvcc 专属，CoreX clang 拒绝）按 PITFALLS §19/20 删除后，撞上**结构性源码缺口**：`cooperative_groups/reduce.h` 缺失（CUDA 11 API）、`cudaStreamWaitEvent` 签名不匹配等——与并行会话的 Strata 移植结论一致，其 `strata-port-plus-fixes.patch` 已为 Strata 树解决同类问题，且其 Strata 二进制已在卡 3 跑通 prefill（遗留 decode NaN 缺陷，见 `/private/iluvatar-strata/PITFALLS.md`）。
+
+**定论**：bi150 的 GPU 层卡在「Iluvatar 源码移植深度」——路线已由并行会话打通（配方+补丁+已知缺陷清单在 `/private/iluvatar-strata/`），待其 decode NaN 修复后，GPU 优先层与统一测评的 GPU 档即可启用。构建日志证据：`results/2026-10-16-gpu-tier-attempt/build-gpu2.log`。当前各层实测基线不变：bi150 CPU t56（27B 5.21 tok/s）、Jetson CUDA GPU 层正常（0.6B/1.7B）。
