@@ -233,4 +233,4 @@
 
 **真机门（双机 --all-candidates）**：ROUTE selected=bi150（min-ttft）；双机执行 4 枚信封 validate 全 VALID、A9 digest 全 VERIFIED；27B 评审两份裁决原文落档。**最有价值的诚实时刻**：canonical prompt 下两机答案都因推理模板烧掉 64-token 预算而空/截断，27B 评审**如实判双 fail（score 2/0）**——质量门第一次真实否决了交付；/no_think 变体复跑双机 pass 9.0/9.0、best_device=bi150。
 
-**暴露的真问题（回流清单）**：① 在跑的 27B 实例忽略 /no_think（仅 chat_template_kwargs.enable_thinking=false 有效），而权限层 h_llm_complete 带不动该字段且不可重启——llm.complete 需要支持推理模型参数透传（v1.1）；② 推理模型下 llm_max_tokens=64 预算必然耗尽（教训第三次出现，schema 默认值需按模型类型分档）；③ jetson/bi150 端口从对端不可达，跨机验收依赖 ssh 隧道——fleet 层需要一条加密数据面（v2）。
+**已解决（2026-10-16 当日晚）**：① h_llm_complete 支持推理模型——`--no-think`（/no_think 前缀 + chat_template_kwargs.enable_thinking=false 双机制）与 `--llm-max-tokens`（默认 64→512 可调，经 /capabilities 暴露）；bi150 真机复测 canonical 案例：空答案 → 109 字符完整回答（61 tokens）；② 同一开关关闭预算耗尽问题；deploy.sh 的 SERVER_ARGS 经 0600 环境文件转写（ssh argv 会压平引号——实测踩坑）；③ jetson/bi150 端口从对端不可达，跨机验收依赖 ssh 隧道——fleet 层需要一条加密数据面（v2）。

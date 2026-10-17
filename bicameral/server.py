@@ -151,6 +151,7 @@ JTI_EXP = {}                                   # jti -> exp (drives expired-firs
 
 SAVE_DIRTY = False                             # set by ledger mutators; snapshot thread consumes
 ADMIN_TOKEN = None                             # control-plane token; set in main()
+NO_THINK = False                               # suppress reasoning-template thinking on llm.complete
 
 
 # --------------------------------------------------------------------------- #
@@ -761,8 +762,13 @@ def h_llm_complete(p, scope):
         raise TooLarge()
     max_tokens = min(int(p.get("max_tokens", LIMITS["llm_max_tokens"])),
                      LIMITS["llm_max_tokens"])
-    body = {"messages": [{"role": "user", "content": prompt}],
+    out_prompt = ("/no_think\n" + prompt) if NO_THINK else prompt
+    body = {"messages": [{"role": "user", "content": out_prompt}],
             "max_tokens": max_tokens, "temperature": 0}
+    if NO_THINK:
+        # dual mechanism: /no_think prefix + chat-template switch, because
+        # deployments differ in which one the reasoning template honours
+        body["chat_template_kwargs"] = {"enable_thinking": False}
     if model_id:
         body["model"] = model_id               # else omitted; llama.cpp tolerates
     req = urllib.request.Request(
@@ -1104,6 +1110,8 @@ class Handler(BaseHTTPRequestHandler):
                     "registry": REGISTRY,
                     "fingerprints": {n: fp(n) for n in REGISTRY},
                     "limits": LIMITS,
+                    "llm": {"thinking": "off" if NO_THINK else "default",
+                            "max_tokens_cap": LIMITS["llm_max_tokens"]},
                 })
             if u.path == "/audit":
                 q = urllib.parse.parse_qs(u.query)
@@ -1156,6 +1164,11 @@ def main():
                     help="control-plane token (X-Admin-Token / Bearer); env BICAMERAL_ADMIN_TOKEN")
     ap.add_argument("--allow-open-control", action="store_true",
                     help="dev only: run the control plane without an admin token")
+    ap.add_argument("--no-think", action="store_true",
+                    help="suppress reasoning-template thinking on llm.complete "
+                         "(/no_think prefix + chat_template_kwargs)")
+    ap.add_argument("--llm-max-tokens", type=int, default=64,
+                    help="cap for llm.complete max_tokens (raise for reasoning models)")
     args = ap.parse_args()
 
     DATA_DIR = args.data_dir.rstrip("/")
@@ -1165,6 +1178,9 @@ def main():
     STATE_PATH = DATA_DIR + "/state.json"
     STRATA_URL = args.strata_url.rstrip("/")
 
+    global NO_THINK
+    NO_THINK = bool(args.no_think)
+    LIMITS["llm_max_tokens"] = max(1, min(int(args.llm_max_tokens), 4096))
     ADMIN_TOKEN = args.admin_token.strip() or None   # "" (open mode) normalises to None
     if ADMIN_TOKEN and len(ADMIN_TOKEN) < 16:
         sys.exit("admin token must be at least 16 characters")
