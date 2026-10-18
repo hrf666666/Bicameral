@@ -1,80 +1,57 @@
 # 两院 Bicameral
 
-> 面向主控-边缘 LLM agent 编排的权限层：HMAC 能力令牌 + 有序 default-deny 拒绝链，约束边缘 agent 的每一次工具调用。Python 单文件，仅标准库。
+> 面向主控-边缘 LLM agent 编排的权限与编排层：HMAC 能力令牌 + 有序 default-deny 拒绝链 + 节点四自代理（自感知/自诊断/自适应/自检）+ 分层部署策略（GPU 优先 → 爆显存上 Strata → CPU 兜底）。仅标准库。
 >
-> English see [README.md](README.md) · 设计文档 [docs/architecture.md](docs/architecture.md)
+> English see [README.md](README.md) · 设计文档 [docs/architecture.md](docs/architecture.md) · 范式 [docs/paradigm.md](docs/paradigm.md)
 
-**结果一句话**：第三轮红队复测 **16/17**，部署实例实机回归 **24/24**（含真实 LLM 路径）。越权调用、令牌伪造与篡改、nonce 重放、prompt 注入（含经真实 LLM 的间接注入端到端）、2 MB 载荷溢出、调用与推理预算耗尽、探测后熔断——全部拦截。单文件 1083 行，零依赖。
+**结果一句话**：三台异构真机（x86_64 + aarch64；天数智芯 CoreX + NVIDIA CUDA）作为一个受治理集群在线；同一份 task/1 在每台设备经各自权限层执行，delivery/1 信封结构一致并经 Qwen3.8-27B 按 quality_bar 裁决；裸节点一条命令零人工 310 秒到 READY（自装工具链、本机构建、自检）；Qwen3.8-27B 诊断脑对规则表外的未知故障各 1 轮命中修复。九组件约 1.47 万行 stdlib Python；三轮红队 + 四轮评审约 60 项缺陷修复；本页每个数字都可回溯到 `results/` 里带审计的实测记录。
 
 ## 1. 解决什么问题
 
-主控大模型会话能唤醒边缘设备上的 agent 并把工具交给它。交出去就有四类失控，而常见手段（提示词约束、框架内建权限）是 **fail-open** 的：约束写在 prompt 里，注入就能绕过去。
+主控大模型会话能唤醒边缘设备上的 agent 并把工具交给它。交出去就有四类失控，而提示词约束与框架内建权限是 **fail-open** 的：
 
 | 失控 | 典型形态 | 两院的收口 |
 |---|---|---|
-| 越权 | agent 调白名单外工具；路径逃出数据范围 | 逐调用 HMAC 验签 + 工具白名单 + realpath 范围校验 |
-| 注入 | 任务文本夹带指令；投毒文件内容经读文件进入 LLM | 入参注入扫描（D12）+ **全通道**响应侧走私剥离 |
-| 重放/伪造 | 令牌截获重放；payload 篡改；攻击者自签 | HMAC 验签 + per-jti nonce 分区 + 严格 TTL |
-| 溢出 | 无界调用、超大载荷、推理花费失控 | 三维预算账本（calls/llm_calls/bytes）+ 尺寸上限 |
+| 越权 | 调白名单外工具；路径逃出数据范围 | 逐调用 HMAC 验签 + 工具白名单 + realpath 范围校验 |
+| 注入 | 任务文本夹带指令；投毒文件进入 LLM | 入参注入扫描 + NUL 拒绝 + 全通道响应走私剥离 |
+| 重放/伪造 | 令牌截获重放（跨重启也防）；篡改；自签 | HMAC 验签 + 持久化 per-jti nonce 分区 + 严格 TTL + 设备侧审计摘要 |
+| 溢出 | 无界调用、超大载荷、推理花费失控 | 三维预算账本（calls/llm_calls/bytes）+ 尺寸上限 + 按模型分档 token 上限 |
 
-原则一句话：**约束不在 prompt 里，在执行口。** 每次工具调用独立对照签名令牌（cap/3）与一条固定顺序的十六道检查链（任一命中即拒），fail-closed，全过程写入 JSONL 审计，可按 `(task_id, jti)` 重构整条链。
+原则一句话：**约束不在 prompt 里，在执行口。** 每次工具调用独立对照签名令牌（cap/3）与十六道有序检查链（D1–D16，命中即拒），fail-closed，全过程写入哈希链审计（尾部可外部锚定）。
 
 ## 2. 构成
 
 | 组件 | 职责 |
 |---|---|
-| 控制平面 `:18000` | `POST /issue` 签发能力令牌；`GET /audit /capabilities /healthz` |
-| agent 平面 `:18001` | `POST /agent/invoke`：验签→拒绝码链→执行→审计 |
-| 能力令牌 cap/3 | payload + HMAC-SHA256：agent / task / 工具白名单 / TTL / 预算 / 策略版本 / 工具指纹 |
-| 三维预算 | calls / llm_calls / bytes 原子扣减；429 携带 `dim=<耗尽维度>` |
-| 推理代理 | `llm.complete` 作为受控工具转发本地 OpenAI 兼容后端：探针 degrade/recover，预算独立计数 |
-| 令牌熔断 | 同一令牌 3 次策略拒绝（调未注册工具、越权、逃逸、注入）后作废，后续调用一律 401 |
+| `bicameral/server.py` | 权限层：控制面（/issue、/audit、/capabilities、/healthz；令牌鉴权、TLS/mTLS 可选）+ agent 面（/agent/invoke，D1–D16 拒绝链）；账本持久化；推理模型 `/no_think` 与 token 上限控制 |
+| `bicameral/probe.py` | 设备自盘点（probe/1）：硬件、加速卡厂商、运行时、已装引擎/模型、监听服务、安装度、分割能力 |
+| `bicameral/install.py` | 受控安装：引擎 tarball + 模型分片（流式 sha256、mirror 回退、flock、回滚、幂等） |
+| `bicameral/nodeagent.py` | 四自层：sense → diagnose（规则表）→ adapt（apt 自装、本机构建）→ verify → 升级；一条命令裸节点到 READY |
+| `bicameral/fleet.py` | 拉模式心跳 + ONLINE/STALE/OFFLINE 注册表；daemon 子命令 + systemd 单元；审计尾锚定 |
+| `bicameral/pipeline.py` | 初心闭环：task/1 → ROUTE → 双机执行 → 27B 按 quality_bar 裁决 → delivery/1 |
+| `scripts/repair.py` | 未知失败的 LLM 修复脑：类型化 JSON 规划、策略门、有界轮、全程审计 |
+| `scripts/powerbench.py` / `qualitybench.py` / `bench.py` | 实测功耗（厂商采样器）、GSM8K-mini 质量抽测、并发扫描 |
 
+## 3. 实测（非宣称）
 
-### 拒绝码链
+完整矩阵见 [results/2026-10-17-ucb/](results/2026-10-17-ucb/)；逐轮证据在 `results/`（14 个带日期目录）与 [docs/redteam/](docs/redteam/)。
 
-调用被拒时返回 `reason_code = <码>/<常量名>`。十六道检查按固定顺序执行，命中第一道即拒：
-
-| 码 | 何时出现 |
+| 维度 | 结果 |
 |---|---|
-| `D1` | 令牌签名验不过（伪造或篡改） |
-| `D2` | 令牌过期——严格判定，无宽限窗口 |
-| `D16` | 熔断：同一令牌累计 3 次策略拒绝后作废 |
-| `D3` | 一次性 nonce 被重复使用（重放） |
-| `D4` | 令牌用错了平面（控制面令牌打到 agent 面） |
-| `D11` | 令牌签发时的策略版本已落后于服务端 |
-| `D9` | 请求体超过 64 KiB 上限 |
-| `D5` | 调用了未注册的工具 |
-| `D6` | 工具不在这枚令牌的白名单里 |
-| `D15` | 工具定义在签发后被改动过（指纹不符） |
-| `D8` | 参数不合 schema，或携带禁用键（`actions`/`tool_calls`） |
-| `D12` | 参数命中注入特征 |
-| `D10` | 预算耗尽——429 并用 `dim=` 标明耗尽的是哪一维 |
-| `D7` | 路径解析后逃出了令牌的数据范围 |
-| `D13` | 该工具依赖的推理后端不可用（fail-closed，不转发） |
-| `D14` | 其他任何异常——默认拒绝 |
-
-## 3. 实证
-
-红队各轮带逐条证据发布在 [docs/redteam/](docs/redteam/)：
-
-| 轮次 | 用例 | 结果 |
-|---|---|---|
-| [v0.1 红队](docs/redteam/2026-10-14-v0.1-redteam/) | 14 条攻击 | 10 拦截 / 3 打穿 / 1 环境受限 → 驱动 10 项修复 |
-| [v0.2 复测](docs/redteam/2026-10-14-v0.2-retest/) | 17 条 | **16/17 符合预期**；唯一未判定项是推理模型耗尽 `max_tokens` 的测试可行性问题，非安全失守 |
-| 实机回归（`scripts/live_check.py`） | 24 项 | 部署实例上 **24/24**，含真实 LLM 路径 |
-
-测试环境：Ubuntu 24.04 容器，112 核 / 1 TB 内存，8× 天数智芯 Iluvatar CoreX BI-V150；推理后端 llama.cpp（Qwen3 27B GGUF）。
+| 权限链吞吐 | 1,433.7 req/s @并发1（p50 0.68 ms，零错误，全拒绝码链） |
+| 分层部署 | Jetson CUDA 层 67.48 tok/s（0.6B）；bi150 Strata 层 2.41 tok/s（Flash-Next，0 NaN）；bi150 CPU 层 5.21 tok/s（27B） |
+| 质量抽测（GSM8K-mini 20 题） | 27B 100%；0.6B 首位 0% / 末位 95%（口径已文档化） |
+| 并发扫描（27B） | 聚合 decode 5.23 → 12.65 tok/s（c1→c4，×2.42 亚线性）；单流 5.5 → 3.2 |
+| 27B 功耗 | 330.3 W 持平（CPU 推理，GPU 闲置——客观数据） |
+| 红队 | 第一轮 14 条攻击（3 打穿→修复）；第二轮 17 条复测（16 符合设计）；能力轮：供应链/穿越/注入全拦 |
 
 ## 4. 快速开始
 
 ```bash
-# 30 秒验证：一次正常往返 + 5 类攻击，逐一被拦在执行口
+# 30 秒端到端验证（自起隔离实例，7 步）
 python3 examples/quickstart.py
-```
 
-```bash
-# 启动；控制面鉴权 fail-closed——设令牌（实验之外再加真实主控密钥）
+# 启动；控制面鉴权 fail-closed——设令牌
 BICAMERAL_ADMIN_TOKEN=$(openssl rand -hex 16) python3 bicameral/server.py
 
 # 签发只读能力令牌（控制面需要管理令牌）
@@ -83,46 +60,45 @@ curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json'
   -d '{"agent":"agent-ro","task_id":"t1","tools":["fs.read"],"ttl_s":600,
        "budget":{"calls":10,"llm_calls":0,"bytes":65536}}'
 
-# 可写 agent 先落一个文件（fs.read 的对象得先存在）
-curl -s -X POST http://127.0.0.1:18000/issue -H 'Content-Type: application/json' \
-  -d '{"agent":"agent-rw","task_id":"t2","tools":["fs.write"]}'
-curl -s -X POST http://127.0.0.1:18001/agent/invoke \
-  -H 'Content-Type: application/json' -H 'X-Capability-Token: <rw-token>' \
-  -d '{"nonce":"w-1","tool":"fs.write","params":{"path":"/tmp/bicameral/data/notes.txt","content":"hello","idem_key":"k1"}}'
-
-# 只读 agent 再读它；每次调用都携带令牌，nonce 重复即判重放
+# 每次调用都携带令牌；nonce 重复即判重放
 curl -s -X POST http://127.0.0.1:18001/agent/invoke \
   -H 'Content-Type: application/json' -H 'X-Capability-Token: <token>' \
   -d '{"nonce":"n-1","tool":"fs.read","params":{"path":"/tmp/bicameral/data/notes.txt"}}'
 ```
 
-## 5. 部署与验证
+裸节点自治引导（自装工具链、本机构建、自检到 READY，零人工）：
 
 ```bash
-ADMIN_TOKEN=<token> HOST=<host> PORT=22 USER=root ./scripts/deploy.sh  # 上传、重启、指纹核对
-python3 scripts/live_check.py --admin-token <token> --expect-sha $(sha256sum bicameral/server.py | cut -c1-16)           # 部署机 24 项回归
+python3 bicameral/nodeagent.py bootstrap --appspec examples/appspec-qwen3-0.6b-q8_0.json \
+  --sandbox /tmp/bicameral-node --engine-source-tgz /path/to/llama-src.tgz
 ```
 
-`/healthz` 暴露 `build_sha`（运行源码指纹）。远端指纹与本地 `sha256sum` 逐位一致才算部署成功——该机制已经抓到过一次静默版本漂移。
+## 5. 部署与运营
+
+```bash
+ADMIN_TOKEN=<token> [NO_THINK=1] [LLM_MAX_TOKENS=512] [TLS_CERT=… TLS_KEY=…] \
+  HOST=<host> PORT=22 USER=root ./scripts/deploy.sh  # 指纹断言式部署
+python3 scripts/live_check.py --admin-token <token> \
+  --expect-sha $(sha256sum bicameral/server.py | cut -c1-16)  # 25 项实机回归
+make bench                                           # 对在跑实例的吞吐基准
+```
+
+远端实例 `build_sha` 不等于本地 `sha256sum` 时部署判负——该断言已两次拦下真实版本漂移。`fleet.py daemon`（systemd 单元在 `deploy/systemd/`）保持设备注册表新鲜并逐周期锚定审计尾。
 
 ## 6. 边界——状态
 
-已解决（2026-10-16）：
-
-- **控制面鉴权**：`/issue`、`/audit`、`/capabilities` 需要管理令牌（`X-Admin-Token` 头或 `Authorization: Bearer`）；`/healthz` 保持开放供探活。启动 fail-closed——没有令牌直接退出，`--allow-open-control` 是显式的开发豁免。
-- **账本持久化**：预算、per-jti nonce 集、熔断计数与过期表原子快照到 `state.json`（节流写入，启动恢复）。重启不再清空重放守卫与预算——fail-open 窗口关闭。
-- **吞吐**：已实测——见 `results/2026-10-16-bench-throughput/`。
+已解决：控制面鉴权（令牌；mTLS 可选）、账本持久化、吞吐实测、加密数据面（TLS/mtls）、审计锚定自动化、引擎级安装、卡分割探测（定论：当前容器/驱动下不可用）、推理模型支持。
 
 仍是边界：
 
-- schema 合法 ≠ 语义正确：LLM 输出内容的事实性不在权限层收口。受治理的 `judge` subject 与 task/1 的 `quality_bar` 是 v2 评审模型的接入钩子。
-- 正则注入扫描天然是尽力而为；NUL 载荷已在 schema 拒绝，真正的门仍是拒绝码链。
-- mTLS / 每客户端证书仍是后续工作；管理令牌是 v1 的控制面凭证。
+- schema 合法 ≠ 语义正确：LLM 输出的事实性不在权限层收口；受治理的 `judge` subject、task/1 `quality_bar` 与 27B 评审脑是接入钩子。
+- 正则注入扫描是尽力而为；NUL 已在 schema 拒绝，真正的门仍是拒绝码链。
+- fleet 注册表 age 列渲染显示更新前快照（磁盘数据新鲜）；mTLS 客户端侧全量铺开归 v2。
 
 ## 7. 设计文档
 
-[docs/architecture.md](docs/architecture.md) — 权限层完整设计：令牌格式、拒绝码链、预算防线、审计、三轮红队实证、残余风险。
-[docs/paradigm.md](docs/paradigm.md) — 上一层范式（设计稿）：设备感知、能力探测、性能实测、自动安装、跨异构设备的统一任务协议。
+- [docs/architecture.md](docs/architecture.md) — 权限层完整设计（令牌、拒绝链、预算、审计、三轮红队）。
+- [docs/paradigm.md](docs/paradigm.md) — 编排范式：设备感知（§3.1）、能力（§3.2）、基准（§3.3）、受控安装（§3.4）、统一任务（§3.5）、自治层（§10）、模型驱动修复（§11）、初心闭环（§12–13）。
 
 ## License
 
